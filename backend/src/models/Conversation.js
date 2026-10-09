@@ -1,0 +1,55 @@
+import mongoose from "mongoose";
+
+const conversationSchema = new mongoose.Schema(
+  {
+    participants: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+        required: true,
+      },
+    ],
+
+    initiatedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+    },
+
+    status: {
+      type: String,
+      enum: ["PENDING", "ACCEPTED", "DECLINED", "REPORTED"],
+      default: "PENDING",
+    },
+
+    lastMessage: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "DirectMessage",
+      default: null,
+    },
+
+    lastMessageAt: {
+      type: Date,
+      default: null,
+    },
+  },
+  {
+    timestamps: true,
+  },
+);
+
+conversationSchema.index({
+  participants: 1,
+});
+
+conversationSchema.index({
+  status: 1,
+});
+
+conversationSchema.index({
+  lastMessageAt: -1,
+});
+
+const Conversation = mongoose.model("Conversation", conversationSchema);
+
+export default Conversation;
