@@ -1,6 +1,7 @@
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import User from "../models/User.js";
+
 import Institution from "../models/Institution.js";
 
 export const register = async (req, res) => {
@@ -111,15 +112,30 @@ export const login = async (req, res) => {
       },
     );
 
-    return res.json({
+    const institutionData = await Institution.findById(user.institution);
+
+    const campusData = institutionData?.campuses.id(user.campus);
+
+    res.json({
       message: "Login successful",
       token,
       user: {
         id: user._id,
         name: user.name,
         email: user.email,
-        institution: user.institution,
-        campus: user.campus,
+        institution: institutionData
+          ? {
+              _id: institutionData._id,
+              name: institutionData.name,
+              shortName: institutionData.shortName,
+            }
+          : null,
+        campus: campusData
+          ? {
+              _id: campusData._id,
+              name: campusData.name,
+            }
+          : null,
         role: user.role,
         isVerifiedStudent: user.isVerifiedStudent,
       },
