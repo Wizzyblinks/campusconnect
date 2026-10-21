@@ -1,18 +1,38 @@
 import MarketplaceListing from "../models/MarketplaceListing.js";
+import cloudinary from "../config/cloudinary.js";
+
+const uploadImage = (buffer) => {
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(
+      {
+        folder: "campus-connect/marketplace",
+        resource_type: "image",
+      },
+      (error, result) => {
+        if (error) {
+          return reject(error);
+        }
+
+        resolve(result.secure_url);
+      },
+    );
+
+    stream.end(buffer);
+  });
+};
 
 export const createListing = async (req, res) => {
   try {
-    const { title, description, price, category, images, condition, stock, sellerTermsAccepted } =
-      req.body;
-
-    const uploadedMedia = (req.files || []).map(
-      (file) => `/uploads/marketplace/${file.filename}`,
-    );
-    const imageUrls = Array.isArray(images)
-      ? images
-      : images
-        ? [images]
-        : [];
+    const {
+      title,
+      description,
+      price,
+      category,
+      images,
+      condition,
+      stock,
+      sellerTermsAccepted,
+    } = req.body;
 
     if (!title || !description || price === undefined || !category) {
       return res.status(400).json({
@@ -22,9 +42,20 @@ export const createListing = async (req, res) => {
 
     if (!req.user.sellerTermsAcceptedAt && sellerTermsAccepted !== "true") {
       return res.status(400).json({
-        message: "You must accept the seller terms before publishing your first listing",
+        message:
+          "You must accept the seller terms before publishing your first listing",
       });
     }
+
+    const existingImages = Array.isArray(images)
+      ? images
+      : images
+        ? [images]
+        : [];
+
+    const uploadedImages = await Promise.all(
+      (req.files || []).map((file) => uploadImage(file.buffer)),
+    );
 
     if (!req.user.sellerTermsAcceptedAt) {
       req.user.sellerTermsAcceptedAt = new Date();
@@ -37,19 +68,21 @@ export const createListing = async (req, res) => {
       description,
       price,
       category,
-      images: [...imageUrls, ...uploadedMedia],
+      images: [...existingImages, ...uploadedImages],
       institution: req.user.institution,
       campus: req.user.campus,
       condition: condition || "new",
       stock: stock === undefined ? 1 : stock,
     });
 
-    res.status(201).json({
+    return res.status(201).json({
       message: "Listing created successfully",
       listing,
     });
   } catch (error) {
-    res.status(500).json({
+    console.error("Create listing error:", error);
+
+    return res.status(500).json({
       message: "Failed to create listing",
       error: error.message,
     });
