@@ -81,6 +81,17 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+
+    sellerTermsAcceptedAt: { type: Date, default: null },
+
+    payoutAccount: {
+      accountName: { type: String, default: "" },
+      accountLast4: { type: String, default: "" },
+      bankCode: { type: String, default: "" },
+      bankName: { type: String, default: "" },
+      recipientCode: { type: String, default: "" },
+      verifiedAt: { type: Date, default: null },
+    },
   },
   {
     timestamps: true,

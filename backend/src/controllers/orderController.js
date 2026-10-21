@@ -1,19 +1,35 @@
 import Order from "../models/Order.js";
 import MarketplaceListing from "../models/MarketplaceListing.js";
 
+const PLATFORM_COMMISSION_RATE = 0.07;
+const MIDDLEMAN_DELIVERY_FEE = 500;
+
 export const createOrder = async (req, res) => {
   try {
-    const { listingId, quantity, deliveryAddress, deliveryPhone, buyerNote } =
+    const { listingId, quantity, deliveryAddress, deliveryPhone, buyerNote, deliveryMethod } =
       req.body;
 
-    if (!listingId || !quantity || !deliveryAddress || !deliveryPhone) {
+    const requestedQuantity = Number(quantity);
+
+    if (
+      !listingId ||
+      !Number.isInteger(requestedQuantity) ||
+      requestedQuantity < 1 ||
+      !["MIDDLEMAN", "SELLER_TO_BUYER"].includes(deliveryMethod) ||
+      !deliveryAddress?.trim() ||
+      !deliveryPhone?.trim()
+    ) {
       return res.status(400).json({
         message:
           "Listing, quantity, delivery address and delivery phone are required",
       });
     }
 
-    const listing = await MarketplaceListing.findById(listingId);
+    const listing = await MarketplaceListing.findOne({
+      _id: listingId,
+      institution: req.user.institution,
+      campus: req.user.campus,
+    });
 
     if (!listing) {
       return res.status(404).json({
@@ -27,7 +43,7 @@ export const createOrder = async (req, res) => {
       });
     }
 
-    if (listing.stock < quantity) {
+    if (listing.stock < requestedQuantity) {
       return res.status(400).json({
         message: "Not enough stock available",
       });
@@ -39,15 +55,27 @@ export const createOrder = async (req, res) => {
       });
     }
 
-    const totalAmount = listing.price * quantity;
+    const itemSubtotal = listing.price * requestedQuantity;
+    const deliveryFee =
+      deliveryMethod === "MIDDLEMAN" ? MIDDLEMAN_DELIVERY_FEE : 0;
+    const platformCommission = Math.round(
+      itemSubtotal * PLATFORM_COMMISSION_RATE * 100,
+    ) / 100;
+    const sellerPayoutAmount = itemSubtotal - platformCommission;
+    const totalAmount = itemSubtotal + deliveryFee;
 
     const order = await Order.create({
       buyer: req.user._id,
       seller: listing.seller,
       listing: listing._id,
-      quantity,
+      quantity: requestedQuantity,
       unitPrice: listing.price,
       totalAmount,
+      deliveryMethod,
+      deliveryFee,
+      platformCommissionRate: PLATFORM_COMMISSION_RATE,
+      platformCommission,
+      sellerPayoutAmount,
       deliveryAddress,
       deliveryPhone,
       buyerNote: buyerNote || "",
@@ -68,8 +96,9 @@ export const createOrder = async (req, res) => {
 export const getMyOrders = async (req, res) => {
   try {
     const orders = await Order.find({
-      buyer: req.user._id,
+      $or: [{ buyer: req.user._id }, { seller: req.user._id }],
     })
+      .populate("buyer", "name email profile.avatar")
       .populate("seller", "name email profile.avatar")
       .populate("listing", "title price images category")
       .sort({ createdAt: -1 });

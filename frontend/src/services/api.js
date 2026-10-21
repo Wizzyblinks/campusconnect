@@ -8,8 +8,9 @@ export async function apiRequest(endpoint, options = {}) {
   console.log("Authentication token exists:", Boolean(token));
 
   try {
+    const isFormData = options.body instanceof FormData;
     const headers = {
-      "Content-Type": "application/json",
+      ...(!isFormData ? { "Content-Type": "application/json" } : {}),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...options.headers,
     };

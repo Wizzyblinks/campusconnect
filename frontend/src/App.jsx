@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { apiRequest } from "./services/api.js";
+import CampusLife3D from "./CampusLife3D.jsx";
 import Auth from "./Auth.jsx";
+import CampusLifeGame from "./CampusLifeGame.jsx";
 import {
   Home,
   ShoppingBag,
@@ -229,9 +231,7 @@ const bottomNavigation = [
   { label: "Home", page: "Home Feed", icon: Home },
   { label: "Marketplace", page: "Marketplace", icon: ShoppingBag },
   { label: "Campus News", page: "Campus News", icon: Newspaper },
-  { label: "Messages", page: "Messages", icon: MessageCircle },
   { label: "Campus Life", page: "Campus Life", icon: Gamepad2 },
-  { label: "Campus Match", page: "Campus Match", icon: Heart },
   { label: "Profile", page: "Profile", icon: UserRound },
 ];
 
@@ -282,6 +282,109 @@ function App() {
   const [matchCampusFilter, setMatchCampusFilter] = useState("All campuses");
   const [matchInterestFilter, setMatchInterestFilter] = useState("");
 
+  const [marketplaceListings, setMarketplaceListings] = useState([]);
+  const [marketplaceLoading, setMarketplaceLoading] = useState(false);
+  const [marketplaceError, setMarketplaceError] = useState("");
+  const [marketplaceSearch, setMarketplaceSearch] = useState("");
+  const [marketplaceCategory, setMarketplaceCategory] = useState("all");
+  const [marketplaceNotice, setMarketplaceNotice] = useState("");
+  const [listingFormOpen, setListingFormOpen] = useState(false);
+  const [checkoutListing, setCheckoutListing] = useState(null);
+  const [ordersOpen, setOrdersOpen] = useState(false);
+  const [orders, setOrders] = useState([]);
+  const [ordersLoading, setOrdersLoading] = useState(false);
+  const [payoutSetupOpen, setPayoutSetupOpen] = useState(false);
+  const [banks, setBanks] = useState([]);
+  const [payoutForm, setPayoutForm] = useState({ accountNumber: "", bankCode: "" });
+  const [deliveryOtpInputs, setDeliveryOtpInputs] = useState({});
+  const [marketplaceSubmitting, setMarketplaceSubmitting] = useState(false);
+  const [listingForm, setListingForm] = useState({
+    title: "",
+    description: "",
+    price: "",
+    category: "electronics",
+    condition: "new",
+    stock: "1",
+    media: [],
+    sellerTermsAccepted: false,
+  });
+  const [orderForm, setOrderForm] = useState({
+    quantity: "1",
+    deliveryAddress: "",
+    deliveryPhone: "",
+    buyerNote: "",
+    deliveryMethod: "SELLER_TO_BUYER",
+  });
+
+  async function loadMarketplaceListings() {
+    setMarketplaceLoading(true);
+    setMarketplaceError("");
+
+    try {
+      const data = await apiRequest("/api/marketplace");
+      setMarketplaceListings(Array.isArray(data.listings) ? data.listings : []);
+    } catch (error) {
+      setMarketplaceError(
+        error.message || "Failed to load marketplace listings.",
+      );
+    } finally {
+      setMarketplaceLoading(false);
+    }
+  }
+
+  async function loadOrders() {
+    setOrdersLoading(true);
+    try {
+      const data = await apiRequest("/api/orders");
+      setOrders(Array.isArray(data.orders) ? data.orders : []);
+    } catch (error) {
+      setMarketplaceError(error.message || "Could not load your orders.");
+    } finally {
+      setOrdersLoading(false);
+    }
+  }
+
+  async function verifyDeliveryOtp(orderId) {
+    try {
+      const data = await apiRequest(`/api/delivery/${orderId}/verify`, {
+        method: "POST",
+        body: JSON.stringify({ otp: deliveryOtpInputs[orderId] || "" }),
+      });
+      setMarketplaceNotice(data.message || "Delivery verified.");
+      setDeliveryOtpInputs((current) => ({ ...current, [orderId]: "" }));
+      loadOrders();
+    } catch (error) {
+      setMarketplaceError(error.message || "Could not verify the delivery code.");
+    }
+  }
+
+  async function openPayoutSetup() {
+    setPayoutSetupOpen(true);
+    try {
+      const data = await apiRequest("/api/payouts/banks");
+      setBanks(Array.isArray(data.banks) ? data.banks : []);
+    } catch (error) {
+      setMarketplaceError(error.message || "Could not load the bank list.");
+    }
+  }
+
+  async function savePayoutAccount(event) {
+    event.preventDefault();
+    setMarketplaceSubmitting(true);
+    try {
+      const data = await apiRequest("/api/payouts/account", {
+        method: "PUT",
+        body: JSON.stringify(payoutForm),
+      });
+      setMarketplaceNotice(data.message);
+      setPayoutSetupOpen(false);
+    } catch (error) {
+      setMarketplaceError(error.message || "Could not save payout account.");
+    } finally {
+      setMarketplaceSubmitting(false);
+    }
+  }
+
   useEffect(() => {
     if (!user || activePage !== "Campus News") {
       return;
@@ -316,6 +419,122 @@ function App() {
       cancelled = true;
     };
   }, [activePage, user]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const reference = params.get("reference");
+
+    if (!user || params.get("payment") !== "success" || !reference) return;
+
+    let cancelled = false;
+    async function confirmReturnedPayment() {
+      setActivePage("Marketplace");
+      setMarketplaceNotice("Confirming your payment...");
+      try {
+        const data = await apiRequest("/api/payments/confirm", {
+          method: "POST",
+          body: JSON.stringify({ reference }),
+        });
+        if (!cancelled) {
+          setMarketplaceNotice(data.message || "Payment confirmed successfully.");
+          loadOrders();
+        }
+      } catch (error) {
+        if (!cancelled) setMarketplaceError(error.message || "Could not confirm payment.");
+      } finally {
+        window.history.replaceState({}, "", window.location.pathname);
+      }
+    }
+    confirmReturnedPayment();
+    return () => { cancelled = true; };
+  }, [user]);
+
+  useEffect(() => {
+    if (!user || activePage !== "Marketplace") {
+      return;
+    }
+
+    loadMarketplaceListings();
+  }, [activePage, user]);
+
+  async function submitListing(event) {
+    event.preventDefault();
+    setMarketplaceSubmitting(true);
+    setMarketplaceError("");
+
+    try {
+      const formData = new FormData();
+      formData.append("title", listingForm.title.trim());
+      formData.append("description", listingForm.description.trim());
+      formData.append("price", listingForm.price);
+      formData.append("category", listingForm.category);
+      formData.append("condition", listingForm.condition);
+      formData.append("stock", listingForm.stock);
+      formData.append("sellerTermsAccepted", String(listingForm.sellerTermsAccepted));
+      listingForm.media.forEach((file) => formData.append("media", file));
+
+      const data = await apiRequest("/api/marketplace", {
+        method: "POST",
+        body: formData,
+      });
+
+      setMarketplaceListings((current) => [data.listing, ...current]);
+      setListingFormOpen(false);
+      setListingForm({
+        title: "",
+        description: "",
+        price: "",
+        category: "electronics",
+        condition: "new",
+        stock: "1",
+        media: [],
+        sellerTermsAccepted: false,
+      });
+      setMarketplaceNotice("Your item is now listed in the marketplace.");
+    } catch (error) {
+      setMarketplaceError(error.message || "Could not create your listing.");
+    } finally {
+      setMarketplaceSubmitting(false);
+    }
+  }
+
+  async function startCheckout(event) {
+    event.preventDefault();
+    if (!checkoutListing) return;
+
+    setMarketplaceSubmitting(true);
+    setMarketplaceError("");
+
+    try {
+      const orderData = await apiRequest("/api/orders", {
+        method: "POST",
+        body: JSON.stringify({
+          listingId: checkoutListing._id,
+          quantity: Number(orderForm.quantity),
+          deliveryAddress: orderForm.deliveryAddress.trim(),
+          deliveryPhone: orderForm.deliveryPhone.trim(),
+          buyerNote: orderForm.buyerNote.trim(),
+          deliveryMethod: orderForm.deliveryMethod,
+        }),
+      });
+      const paymentData = await apiRequest("/api/payments/initialize", {
+        method: "POST",
+        body: JSON.stringify({
+          orderId: orderData.order._id,
+          callbackUrl: `${window.location.origin}${window.location.pathname}?payment=success`,
+        }),
+      });
+
+      if (!paymentData.payment?.authorizationUrl) {
+        throw new Error("The payment provider did not return a checkout link.");
+      }
+
+      window.location.assign(paymentData.payment.authorizationUrl);
+    } catch (error) {
+      setMarketplaceError(error.message || "Could not start checkout.");
+      setMarketplaceSubmitting(false);
+    }
+  }
 
   function handleLogin(loggedInUser) {
     localStorage.setItem("user", JSON.stringify(loggedInUser));
@@ -469,6 +688,21 @@ function App() {
     return matchesCampus && matchesInterest;
   });
 
+  const filteredMarketplaceListings = marketplaceListings.filter((listing) => {
+    const query = marketplaceSearch.trim().toLowerCase();
+
+    const matchesSearch =
+      !query ||
+      listing.title?.toLowerCase().includes(query) ||
+      listing.description?.toLowerCase().includes(query) ||
+      listing.category?.toLowerCase().includes(query);
+
+    const matchesCategory =
+      marketplaceCategory === "all" || listing.category === marketplaceCategory;
+
+    return matchesSearch && matchesCategory;
+  });
+
   if (!user) {
     return <Auth onLogin={handleLogin} />;
   }
@@ -529,6 +763,43 @@ function App() {
           </div>
 
           <div className="flex shrink-0 items-center gap-2 sm:gap-4">
+            <button
+              type="button"
+              onClick={() => {
+                setActivePage("Messages");
+                setMobileMenuOpen(false);
+                setNotificationsOpen(false);
+              }}
+              aria-label="Messages"
+              title="Messages"
+              className={`relative rounded-xl p-2.5 transition ${
+                activePage === "Messages"
+                  ? "bg-blue-50 text-blue-700"
+                  : "text-slate-600 hover:bg-blue-50 hover:text-blue-700"
+              }`}
+            >
+              <MessageCircle size={21} />
+              <span className="absolute right-1 top-1 h-2 w-2 rounded-full bg-red-500 ring-2 ring-white" />
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setActivePage("Campus Match");
+                setMobileMenuOpen(false);
+                setNotificationsOpen(false);
+              }}
+              aria-label="Campus Match"
+              title="Campus Match"
+              className={`rounded-xl p-2.5 transition ${
+                activePage === "Campus Match"
+                  ? "bg-pink-50 text-pink-600"
+                  : "text-slate-600 hover:bg-pink-50 hover:text-pink-600"
+              }`}
+            >
+              <Heart size={21} />
+            </button>
+
             <div className="relative">
               <button
                 onClick={() => {
@@ -805,7 +1076,6 @@ function App() {
               />
             </div>
           </div>
-
           <div className="mb-7">
             <p className="mb-1 text-sm font-medium text-slate-500">
               Welcome, {fullName}
@@ -828,250 +1098,7 @@ function App() {
             </p>
           </div>
 
-          {activePage !== "Campus Life" && activePage !== "Campus Match" && (
-            <div className="mb-7 grid grid-cols-2 gap-3 xl:grid-cols-4">
-              <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                <div className="mb-3 flex h-9 w-9 items-center justify-center rounded-xl bg-blue-50 text-blue-700">
-                  <Users size={19} />
-                </div>
-
-                <p className="text-xl font-extrabold">Connect</p>
-
-                <p className="mt-1 text-xs text-slate-500">
-                  Across Nigerian campuses
-                </p>
-              </div>
-
-              <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                <div className="mb-3 flex h-9 w-9 items-center justify-center rounded-xl bg-orange-50 text-orange-600">
-                  <TrendingUp size={19} />
-                </div>
-
-                <p className="text-xl font-extrabold">Discover</p>
-
-                <p className="mt-1 text-xs text-slate-500">
-                  Campus trends and stories
-                </p>
-              </div>
-
-              <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                <div className="mb-3 flex h-9 w-9 items-center justify-center rounded-xl bg-purple-50 text-purple-600">
-                  <BookOpen size={19} />
-                </div>
-
-                <p className="text-xl font-extrabold">Learn</p>
-
-                <p className="mt-1 text-xs text-slate-500">
-                  Resources for students
-                </p>
-              </div>
-
-              <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                <div className="mb-3 flex h-9 w-9 items-center justify-center rounded-xl bg-green-50 text-green-600">
-                  <ShoppingBag size={19} />
-                </div>
-
-                <p className="text-xl font-extrabold">Trade</p>
-
-                <p className="mt-1 text-xs text-slate-500">
-                  Buy and sell on campus
-                </p>
-              </div>
-            </div>
-          )}
-
-          {activePage === "Home Feed" && (
-            <form
-              onSubmit={publishPost}
-              className="mb-6 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5"
-            >
-              <div className="flex items-start gap-3">
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-blue-100 font-bold text-blue-700">
-                  {userInitials}
-                </div>
-
-                <textarea
-                  value={newPost}
-                  onChange={(event) => setNewPost(event.target.value)}
-                  placeholder="What's happening on your campus?"
-                  rows={2}
-                  className="min-h-20 flex-1 resize-y rounded-xl bg-slate-50 p-3 text-sm outline-none transition focus:ring-2 focus:ring-blue-200"
-                />
-              </div>
-
-              <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-4">
-                <p className="hidden text-xs text-slate-400 sm:block">
-                  Share ideas, questions and campus updates.
-                </p>
-
-                <button
-                  type="submit"
-                  disabled={!newPost.trim()}
-                  className="ml-auto flex items-center gap-2 rounded-xl bg-blue-700 px-5 py-2.5 text-sm font-bold text-white transition hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <Plus size={17} /> Create Post
-                </button>
-              </div>
-            </form>
-          )}
-
-          {activePage === "Campus Life" && (
-            <section className="space-y-6">
-              <div className="overflow-hidden rounded-3xl bg-gradient-to-br from-blue-800 via-blue-700 to-indigo-900 p-6 text-white sm:p-8">
-                <div className="flex flex-col justify-between gap-6 sm:flex-row sm:items-center">
-                  <div>
-                    <div className="mb-3 inline-flex items-center gap-2 rounded-full bg-white/15 px-3 py-1.5 text-xs font-semibold">
-                      <Gamepad2 size={16} />
-                      CAMPUS EXPLORER
-                    </div>
-
-                    <h3 className="text-2xl font-extrabold sm:text-3xl">
-                      Welcome to Campus Life
-                    </h3>
-
-                    <p className="mt-3 max-w-xl text-sm leading-6 text-blue-100">
-                      Explore campus locations, discover places to hang out, and
-                      get familiar with life at your university.
-                    </p>
-
-                    <p className="mt-3 text-xs text-blue-200">
-                      {institutionName || "Your university"}
-                    </p>
-                  </div>
-
-                  <div className="flex h-24 w-24 shrink-0 items-center justify-center self-center rounded-3xl bg-white/10 text-6xl sm:self-auto">
-                    🎮
-                  </div>
-                </div>
-              </div>
-
-              <div className="rounded-2xl border border-slate-200 bg-white p-5">
-                <div className="mb-4 flex items-center gap-3">
-                  <MapPin className="text-blue-700" size={22} />
-
-                  <div>
-                    <h3 className="font-extrabold">Explore Campus</h3>
-
-                    <p className="mt-1 text-sm text-slate-500">
-                      Select a location to learn more about it.
-                    </p>
-                  </div>
-                </div>
-
-                <div className="mb-5 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                  {filteredLocations.map((location) => (
-                    <button
-                      key={location.name}
-                      onClick={() => setSelectedLocation(location)}
-                      className={`rounded-2xl border p-4 text-left transition hover:border-blue-300 hover:bg-blue-50 ${
-                        selectedLocation?.name === location.name
-                          ? "border-blue-600 bg-blue-50 ring-2 ring-blue-100"
-                          : "border-slate-200 bg-white"
-                      }`}
-                    >
-                      <div className="mb-3 flex h-11 w-11 items-center justify-center rounded-xl bg-slate-100 text-2xl">
-                        {location.icon}
-                      </div>
-
-                      <h4 className="font-bold text-slate-900">
-                        {location.name}
-                      </h4>
-
-                      <p className="mt-1 text-xs leading-5 text-slate-500">
-                        {location.description}
-                      </p>
-                    </button>
-                  ))}
-                </div>
-
-                {filteredLocations.length === 0 && (
-                  <p className="rounded-xl bg-slate-50 p-5 text-center text-sm text-slate-500">
-                    No campus locations match your search.
-                  </p>
-                )}
-
-                {selectedLocation && (
-                  <div className="rounded-2xl border border-blue-200 bg-blue-50 p-5">
-                    <div className="flex items-start gap-4">
-                      <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-white text-3xl shadow-sm">
-                        {selectedLocation.icon}
-                      </div>
-
-                      <div className="flex-1">
-                        <p className="text-xs font-bold uppercase tracking-wider text-blue-700">
-                          Selected location
-                        </p>
-
-                        <h4 className="mt-1 text-lg font-extrabold text-slate-900">
-                          {selectedLocation.name}
-                        </h4>
-
-                        <p className="mt-2 text-sm leading-6 text-slate-600">
-                          {selectedLocation.description}
-                        </p>
-                      </div>
-
-                      <button
-                        onClick={() => setSelectedLocation(null)}
-                        className="rounded-lg p-2 text-slate-500 hover:bg-white"
-                        aria-label="Close location details"
-                      >
-                        <X size={18} />
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <div className="rounded-2xl border border-slate-200 bg-white p-5">
-                  <div className="mb-3 flex h-11 w-11 items-center justify-center rounded-xl bg-orange-50 text-orange-600">
-                    <Users size={22} />
-                  </div>
-
-                  <h3 className="font-extrabold">Campus Community</h3>
-
-                  <p className="mt-2 text-sm leading-6 text-slate-500">
-                    Connect with other students and share your campus
-                    experiences.
-                  </p>
-
-                  <button
-                    onClick={() => setActivePage("Communities")}
-                    className="mt-4 text-sm font-bold text-blue-700 hover:underline"
-                  >
-                    Explore communities →
-                  </button>
-                </div>
-
-                <div className="rounded-2xl border border-slate-200 bg-white p-5">
-                  <div className="mb-3 flex h-11 w-11 items-center justify-center rounded-xl bg-green-50 text-green-700">
-                    <Utensils size={22} />
-                  </div>
-
-                  <h3 className="font-extrabold">Food Around Campus</h3>
-
-                  <p className="mt-2 text-sm leading-6 text-slate-500">
-                    Find the campus cafeteria and explore food-related
-                    information.
-                  </p>
-
-                  <button
-                    onClick={() => setActivePage("Cafeteria")}
-                    className="mt-4 text-sm font-bold text-blue-700 hover:underline"
-                  >
-                    Explore cafeteria →
-                  </button>
-                </div>
-              </div>
-
-              <p className="text-xs leading-5 text-slate-400">
-                This is the initial Campus Life explorer, not yet a playable 2D
-                game map. The interactive map, character movement, missions, and
-                game features can be added in later stages.
-              </p>
-            </section>
-          )}
+          {activePage === "Campus Life" && <CampusLife3D />}
 
           {activePage === "Campus Match" && (
             <section className="space-y-6">
@@ -1276,7 +1303,6 @@ function App() {
               </div>
             </section>
           )}
-
           {activePage === "Profile" && (
             <section className="space-y-5">
               <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white">
@@ -1351,116 +1377,464 @@ function App() {
               </div>
             </section>
           )}
+          {activePage === "Marketplace" && (
+            <section className="space-y-6">
+              {/* Marketplace banner */}
+              <div className="overflow-hidden rounded-3xl bg-gradient-to-br from-blue-700 via-blue-600 to-indigo-800 p-6 text-white sm:p-8">
+                <div className="flex flex-col justify-between gap-5 sm:flex-row sm:items-center">
+                  <div>
+                    <div className="mb-3 inline-flex items-center gap-2 rounded-full bg-white/15 px-3 py-1.5 text-xs font-bold">
+                      <ShoppingBag size={15} />
+                      STUDENT MARKETPLACE
+                    </div>
+
+                    <h3 className="text-2xl font-extrabold sm:text-3xl">
+                      Buy and sell on campus
+                    </h3>
+
+                    <p className="mt-3 max-w-xl text-sm leading-6 text-blue-100">
+                      Discover products and services offered by students in your
+                      campus community.
+                    </p>
+                  </div>
+
+                  <div className="flex h-20 w-20 shrink-0 items-center justify-center self-center rounded-3xl bg-white/15 sm:self-auto">
+                    <ShoppingBag size={40} />
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMarketplaceNotice("");
+                    setListingFormOpen(true);
+                  }}
+                  className="mt-5 inline-flex items-center gap-2 rounded-xl bg-white px-4 py-3 text-sm font-bold text-blue-700 transition hover:bg-blue-50"
+                >
+                  <Plus size={18} />
+                  Sell an item
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { loadOrders(); setOrdersOpen(true); }}
+                  className="ml-3 inline-flex items-center gap-2 rounded-xl border border-white/40 px-4 py-3 text-sm font-bold text-white transition hover:bg-white/10"
+                >
+                  My orders
+                </button>
+                <button
+                  type="button"
+                  onClick={openPayoutSetup}
+                  className="ml-3 mt-3 inline-flex items-center gap-2 rounded-xl border border-white/40 px-4 py-3 text-sm font-bold text-white transition hover:bg-white/10 sm:mt-0"
+                >
+                  Set payout account
+                </button>
+              </div>
+
+              {marketplaceNotice && (
+                <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm font-semibold text-emerald-800">
+                  {marketplaceNotice}
+                </div>
+              )}
+
+              {/* Search and category filters */}
+              <div className="rounded-2xl border border-slate-200 bg-white p-4 sm:p-5">
+                <div className="flex flex-col gap-4 sm:flex-row">
+                  <div className="flex flex-1 items-center gap-3 rounded-xl border border-slate-200 px-4 py-3 focus-within:border-blue-400 focus-within:ring-2 focus-within:ring-blue-100">
+                    <Search size={19} className="shrink-0 text-slate-400" />
+
+                    <input
+                      type="search"
+                      value={marketplaceSearch}
+                      onChange={(event) =>
+                        setMarketplaceSearch(event.target.value)
+                      }
+                      placeholder="Search products..."
+                      className="w-full bg-transparent text-sm outline-none"
+                    />
+                  </div>
+
+                  <select
+                    value={marketplaceCategory}
+                    onChange={(event) =>
+                      setMarketplaceCategory(event.target.value)
+                    }
+                    aria-label="Filter marketplace by category"
+                    className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+                  >
+                    <option value="all">All categories</option>
+                    <option value="electronics">Electronics</option>
+                    <option value="fashion">Fashion</option>
+                    <option value="books">Books</option>
+                    <option value="food">Food</option>
+                    <option value="services">Services</option>
+                    <option value="school_items">School Items</option>
+                    <option value="others">Others</option>
+                  </select>
+                </div>
+
+                <div className="mt-4 flex items-center justify-between gap-3">
+                  <p className="text-sm text-slate-500">
+                    {filteredMarketplaceListings.length}{" "}
+                    {filteredMarketplaceListings.length === 1
+                      ? "listing"
+                      : "listings"}{" "}
+                    found
+                  </p>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMarketplaceSearch("");
+                      setMarketplaceCategory("all");
+                      setMarketplaceError("");
+                      setActivePage("Marketplace");
+                    }}
+                    className="text-sm font-semibold text-blue-700 hover:underline"
+                  >
+                    Clear filters
+                  </button>
+                </div>
+              </div>
+
+              {/* Loading state */}
+              {marketplaceLoading && (
+                <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center">
+                  <div className="mx-auto h-9 w-9 animate-spin rounded-full border-4 border-blue-100 border-t-blue-700" />
+
+                  <p className="mt-4 text-sm font-medium text-slate-600">
+                    Loading marketplace listings...
+                  </p>
+                </div>
+              )}
+
+              {/* Error state */}
+              {!marketplaceLoading && marketplaceError && (
+                <div className="rounded-2xl border border-red-200 bg-red-50 p-5">
+                  <h3 className="font-bold text-red-800">
+                    Unable to load marketplace
+                  </h3>
+
+                  <p className="mt-2 text-sm leading-6 text-red-700">
+                    {marketplaceError}
+                  </p>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMarketplaceError("");
+                      loadMarketplaceListings();
+                    }}
+                    className="mt-4 rounded-xl bg-red-100 px-4 py-2.5 text-sm font-semibold text-red-800 hover:bg-red-200"
+                  >
+                    Try again
+                  </button>
+                </div>
+              )}
+
+              {/* Empty state */}
+              {!marketplaceLoading &&
+                !marketplaceError &&
+                marketplaceListings.length === 0 && (
+                  <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center sm:p-12">
+                    <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-blue-50 text-blue-700">
+                      <ShoppingBag size={32} />
+                    </div>
+
+                    <h3 className="mt-4 text-lg font-extrabold">
+                      No marketplace listings yet
+                    </h3>
+
+                    <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-slate-500">
+                      Products listed by students in your campus community will
+                      appear here.
+                    </p>
+
+                    <button
+                      type="button"
+                      onClick={() => setListingFormOpen(true)}
+                      className="mt-5 inline-flex items-center gap-2 rounded-xl bg-blue-700 px-5 py-3 text-sm font-bold text-white hover:bg-blue-800"
+                    >
+                      <Plus size={18} />
+                      List your first item
+                    </button>
+                  </div>
+                )}
+
+              {/* No search results */}
+              {!marketplaceLoading &&
+                !marketplaceError &&
+                marketplaceListings.length > 0 &&
+                filteredMarketplaceListings.length === 0 && (
+                  <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center">
+                    <Search size={32} className="mx-auto text-slate-400" />
+
+                    <h3 className="mt-3 font-bold text-slate-800">
+                      No matching products
+                    </h3>
+
+                    <p className="mt-2 text-sm text-slate-500">
+                      Try another search term or select a different category.
+                    </p>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMarketplaceSearch("");
+                        setMarketplaceCategory("all");
+                      }}
+                      className="mt-4 rounded-xl bg-blue-700 px-5 py-2.5 text-sm font-bold text-white hover:bg-blue-800"
+                    >
+                      Show all products
+                    </button>
+                  </div>
+                )}
+
+              {/* Product listings */}
+              {!marketplaceLoading &&
+                !marketplaceError &&
+                filteredMarketplaceListings.length > 0 && (
+                  <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-3">
+                    {filteredMarketplaceListings.map((listing) => {
+                      const image = Array.isArray(listing.images)
+                        ? listing.images[0]
+                        : listing.images;
+
+                      const imageUrl = image
+                        ? image.startsWith("http")
+                          ? image
+                          : `http://localhost:5000${
+                              image.startsWith("/") ? "" : "/"
+                            }${image}`
+                        : "";
+
+                      const seller =
+                        typeof listing.seller === "object"
+                          ? listing.seller?.name
+                          : "Campus seller";
+
+                      return (
+                        <article
+                          key={listing._id}
+                          className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm transition hover:-translate-y-1 hover:shadow-lg"
+                        >
+                          <div className="relative flex h-52 items-center justify-center overflow-hidden bg-slate-100">
+                            {imageUrl ? (
+                              imageUrl.match(/\.(mp4|webm|mov)(\?.*)?$/i) ? (
+                                <video src={imageUrl} controls className="h-full w-full object-cover" />
+                              ) : (
+                                <img
+                                  src={imageUrl}
+                                  alt={listing.title || "Marketplace product"}
+                                  className="h-full w-full object-cover"
+                                  onError={(event) => {
+                                    event.currentTarget.style.display = "none";
+                                  }}
+                                />
+                              )
+                            ) : (
+                              <div className="flex flex-col items-center gap-2 text-slate-400">
+                                <ShoppingBag size={42} />
+
+                                <span className="text-xs">
+                                  No product image
+                                </span>
+                              </div>
+                            )}
+
+                            <span className="absolute left-3 top-3 rounded-full bg-white/95 px-3 py-1.5 text-xs font-bold capitalize text-blue-700 shadow-sm">
+                              {(listing.category || "others").replace(
+                                /_/g,
+                                " ",
+                              )}
+                            </span>
+
+                            {listing.condition && (
+                              <span className="absolute right-3 top-3 rounded-full bg-slate-900/75 px-3 py-1.5 text-xs font-semibold capitalize text-white">
+                                {listing.condition}
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="p-4">
+                            <h3 className="line-clamp-2 min-h-12 text-base font-extrabold text-slate-900">
+                              {listing.title || "Untitled product"}
+                            </h3>
+
+                            <p className="mt-2 line-clamp-3 min-h-[4.5rem] text-sm leading-6 text-slate-500">
+                              {listing.description ||
+                                "No product description provided."}
+                            </p>
+
+                            <div className="mt-4 flex items-center justify-between gap-3">
+                              <p className="text-lg font-extrabold text-blue-700">
+                                {new Intl.NumberFormat("en-NG", {
+                                  style: "currency",
+                                  currency: "NGN",
+                                  maximumFractionDigits: 2,
+                                }).format(Number(listing.price) || 0)}
+                              </p>
+
+                              <span className="text-xs text-slate-500">
+                                Stock: {listing.stock ?? 1}
+                              </span>
+                            </div>
+
+                            <div className="mt-4 flex items-center gap-2 border-t border-slate-100 pt-4">
+                              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-blue-100 text-sm font-bold text-blue-700">
+                                {(seller || "S")
+                                  .split(" ")
+                                  .filter(Boolean)
+                                  .slice(0, 2)
+                                  .map((part) => part[0].toUpperCase())
+                                  .join("")}
+                              </div>
+
+                              <div className="min-w-0">
+                                <p className="truncate text-sm font-semibold text-slate-800">
+                                  {seller || "Campus seller"}
+                                </p>
+
+                                <p className="text-xs text-slate-500">
+                                  Campus Connect seller
+                                </p>
+                              </div>
+                            </div>
+
+                            {String(
+                              typeof listing.seller === "object"
+                                ? listing.seller?._id || listing.seller?.id
+                                : listing.seller,
+                            ) === String(user.id) ? (
+                              <p className="mt-4 rounded-xl bg-slate-100 px-4 py-3 text-center text-sm font-bold text-slate-500">
+                                This is your listing
+                              </p>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setOrderForm((current) => ({
+                                    ...current,
+                                    quantity: "1",
+                                  }));
+                                  setCheckoutListing(listing);
+                                }}
+                                className="mt-4 w-full rounded-xl bg-blue-700 px-4 py-3 text-sm font-bold text-white transition hover:bg-blue-800"
+                              >
+                                Buy now
+                              </button>
+                            )}
+                          </div>
+                        </article>
+                      );
+                    })}
+                  </div>
+                )}
+
+              {listingFormOpen && (
+                <div className="fixed inset-0 z-[60] flex items-end bg-slate-950/50 p-0 sm:items-center sm:justify-center sm:p-4">
+                  <form
+                    onSubmit={submitListing}
+                    className="max-h-[92vh] w-full overflow-y-auto rounded-t-3xl bg-white p-5 shadow-2xl sm:max-w-2xl sm:rounded-3xl sm:p-7"
+                  >
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <h3 className="text-xl font-extrabold text-slate-900">Sell an item</h3>
+                        <p className="mt-1 text-sm text-slate-500">Your listing will be visible to students on your campus.</p>
+                      </div>
+                      <button type="button" onClick={() => setListingFormOpen(false)} aria-label="Close listing form" className="rounded-lg p-2 text-slate-500 hover:bg-slate-100">✕</button>
+                    </div>
+
+                    <div className="mt-6 grid gap-4 sm:grid-cols-2">
+                      <label className="sm:col-span-2"><span className="mb-1.5 block text-sm font-semibold">Item title</span><input required maxLength={120} value={listingForm.title} onChange={(event) => setListingForm((current) => ({ ...current, title: event.target.value }))} className="w-full rounded-xl border border-slate-200 px-4 py-3 outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100" placeholder="e.g. Calculus textbook" /></label>
+                      <label className="sm:col-span-2"><span className="mb-1.5 block text-sm font-semibold">Description</span><textarea required maxLength={1000} rows={4} value={listingForm.description} onChange={(event) => setListingForm((current) => ({ ...current, description: event.target.value }))} className="w-full resize-y rounded-xl border border-slate-200 px-4 py-3 outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100" placeholder="Describe the item, its condition, and how students can use it." /></label>
+                      <label><span className="mb-1.5 block text-sm font-semibold">Price (₦)</span><input required min="0" step="0.01" type="number" value={listingForm.price} onChange={(event) => setListingForm((current) => ({ ...current, price: event.target.value }))} className="w-full rounded-xl border border-slate-200 px-4 py-3 outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100" /></label>
+                      <label><span className="mb-1.5 block text-sm font-semibold">Quantity available</span><input required min="1" step="1" type="number" value={listingForm.stock} onChange={(event) => setListingForm((current) => ({ ...current, stock: event.target.value }))} className="w-full rounded-xl border border-slate-200 px-4 py-3 outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100" /></label>
+                      <label><span className="mb-1.5 block text-sm font-semibold">Category</span><select value={listingForm.category} onChange={(event) => setListingForm((current) => ({ ...current, category: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 outline-none focus:border-blue-600"><option value="electronics">Electronics</option><option value="fashion">Fashion</option><option value="books">Books</option><option value="food">Food</option><option value="services">Services</option><option value="school_items">School Items</option><option value="others">Others</option></select></label>
+                      <label><span className="mb-1.5 block text-sm font-semibold">Condition</span><select value={listingForm.condition} onChange={(event) => setListingForm((current) => ({ ...current, condition: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 outline-none focus:border-blue-600"><option value="new">New</option><option value="used">Used</option><option value="fair">Fair</option></select></label>
+                      <label className="sm:col-span-2"><span className="mb-1.5 block text-sm font-semibold">Photos or video <span className="font-normal text-slate-400">(up to 4 files, 25 MB each)</span></span><input type="file" accept="image/*,video/*" multiple onChange={(event) => setListingForm((current) => ({ ...current, media: Array.from(event.target.files || []) }))} className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm file:mr-4 file:rounded-lg file:border-0 file:bg-blue-50 file:px-3 file:py-2 file:font-semibold file:text-blue-700" /></label>
+                      <label className="sm:col-span-2 flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950"><input required type="checkbox" checked={listingForm.sellerTermsAccepted} onChange={(event) => setListingForm((current) => ({ ...current, sellerTermsAccepted: event.target.checked }))} className="mt-0.5 h-4 w-4" /><span>I confirm that this listing is genuine, I will not engage in fraudulent activity, and I accept Campus Connect’s 7% commission on each completed sale plus any applicable marketplace terms.</span></label>
+                    </div>
+                    <button type="submit" disabled={marketplaceSubmitting} className="mt-6 w-full rounded-xl bg-blue-700 px-5 py-3.5 text-sm font-bold text-white hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-60">{marketplaceSubmitting ? "Publishing..." : "Publish listing"}</button>
+                  </form>
+                </div>
+              )}
+
+              {checkoutListing && (
+                <div className="fixed inset-0 z-[60] flex items-end bg-slate-950/50 p-0 sm:items-center sm:justify-center sm:p-4">
+                  <form onSubmit={startCheckout} className="max-h-[92vh] w-full overflow-y-auto rounded-t-3xl bg-white p-5 shadow-2xl sm:max-w-lg sm:rounded-3xl sm:p-7">
+                    <div className="flex items-start justify-between gap-4"><div><h3 className="text-xl font-extrabold text-slate-900">Checkout</h3><p className="mt-1 text-sm text-slate-500">{checkoutListing.title} · ₦{Number(checkoutListing.price).toLocaleString()}</p></div><button type="button" onClick={() => setCheckoutListing(null)} aria-label="Close checkout" className="rounded-lg p-2 text-slate-500 hover:bg-slate-100">✕</button></div>
+                    <div className="mt-6 space-y-4">
+                      <label><span className="mb-1.5 block text-sm font-semibold">Quantity</span><input required min="1" max={checkoutListing.stock} type="number" value={orderForm.quantity} onChange={(event) => setOrderForm((current) => ({ ...current, quantity: event.target.value }))} className="w-full rounded-xl border border-slate-200 px-4 py-3 outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100" /></label>
+                      <fieldset><legend className="mb-2 text-sm font-semibold">Delivery method</legend><div className="space-y-2"><label className={`block cursor-pointer rounded-xl border p-3 ${orderForm.deliveryMethod === "SELLER_TO_BUYER" ? "border-blue-500 bg-blue-50" : "border-slate-200"}`}><input className="mr-2" type="radio" name="deliveryMethod" value="SELLER_TO_BUYER" checked={orderForm.deliveryMethod === "SELLER_TO_BUYER"} onChange={(event) => setOrderForm((current) => ({ ...current, deliveryMethod: event.target.value }))} /><span className="font-bold">Seller to buyer</span><span className="mt-1 block pl-5 text-xs text-slate-600">No Campus Connect delivery charge. The seller delivers; give the seller your OTP only after receiving the item.</span></label><label className={`block cursor-pointer rounded-xl border p-3 ${orderForm.deliveryMethod === "MIDDLEMAN" ? "border-blue-500 bg-blue-50" : "border-slate-200"}`}><input className="mr-2" type="radio" name="deliveryMethod" value="MIDDLEMAN" checked={orderForm.deliveryMethod === "MIDDLEMAN"} onChange={(event) => setOrderForm((current) => ({ ...current, deliveryMethod: event.target.value }))} /><span className="font-bold">Campus Connect middleman</span><span className="mt-1 block pl-5 text-xs text-slate-600">A Campus Connect middleman handles pickup and delivery. ₦500 campus delivery charge applies.</span></label></div></fieldset>
+                      <label><span className="mb-1.5 block text-sm font-semibold">Delivery location</span><input required value={orderForm.deliveryAddress} onChange={(event) => setOrderForm((current) => ({ ...current, deliveryAddress: event.target.value }))} className="w-full rounded-xl border border-slate-200 px-4 py-3 outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100" placeholder="Hostel, department, or campus pickup point" /></label>
+                      <label><span className="mb-1.5 block text-sm font-semibold">Phone number</span><input required type="tel" value={orderForm.deliveryPhone} onChange={(event) => setOrderForm((current) => ({ ...current, deliveryPhone: event.target.value }))} className="w-full rounded-xl border border-slate-200 px-4 py-3 outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100" placeholder="080..." /></label>
+                      <label><span className="mb-1.5 block text-sm font-semibold">Note to seller <span className="font-normal text-slate-400">(optional)</span></span><textarea maxLength={500} rows={3} value={orderForm.buyerNote} onChange={(event) => setOrderForm((current) => ({ ...current, buyerNote: event.target.value }))} className="w-full resize-y rounded-xl border border-slate-200 px-4 py-3 outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100" /></label>
+                    </div>
+                    <p className="mt-4 rounded-xl bg-slate-50 p-3 text-sm text-slate-700">{orderForm.deliveryMethod === "MIDDLEMAN" ? "₦500 middleman delivery fee will be added at checkout." : "The seller will arrange direct delivery with you."}</p><button type="submit" disabled={marketplaceSubmitting} className="mt-4 w-full rounded-xl bg-blue-700 px-5 py-3.5 text-sm font-bold text-white hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-60">{marketplaceSubmitting ? "Opening secure checkout..." : "Continue to secure payment"}</button>
+                  </form>
+                </div>
+              )}
+
+              {ordersOpen && (
+                <div className="fixed inset-0 z-[60] flex items-end bg-slate-950/50 sm:items-center sm:justify-center sm:p-4">
+                  <div className="max-h-[90vh] w-full overflow-y-auto rounded-t-3xl bg-white p-5 shadow-2xl sm:max-w-2xl sm:rounded-3xl sm:p-7">
+                    <div className="flex items-start justify-between gap-4"><div><h3 className="text-xl font-extrabold">My orders</h3><p className="mt-1 text-sm text-slate-500">Track purchases and orders placed for your listings.</p></div><button type="button" onClick={() => setOrdersOpen(false)} aria-label="Close orders" className="rounded-lg p-2 text-slate-500 hover:bg-slate-100">✕</button></div>
+                    {ordersLoading ? <p className="py-10 text-center text-sm text-slate-500">Loading orders...</p> : orders.length === 0 ? <p className="py-10 text-center text-sm text-slate-500">You do not have any orders yet.</p> : <div className="mt-5 space-y-3">{orders.map((order) => {
+                      const isSeller = String(order.seller?._id || order.seller) === String(user.id);
+                      return <article key={order._id} className="rounded-2xl border border-slate-200 p-4"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="font-extrabold text-slate-900">{order.listing?.title || "Marketplace item"}</p><p className="mt-1 text-sm text-slate-500">{isSeller ? `Buyer: ${order.buyer?.name || "Student"}` : `Seller: ${order.seller?.name || "Student"}`}</p></div><span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-bold text-blue-700">{order.status.replaceAll("_", " ")}</span></div><div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-sm text-slate-600"><span>₦{Number(order.totalAmount).toLocaleString()}</span><span>Qty: {order.quantity}</span><span>Payment: {order.paymentStatus}</span><span>Delivery: {order.deliveryStatus}</span></div><p className="mt-3 text-sm font-semibold text-slate-700">{order.deliveryMethod === "MIDDLEMAN" ? `Campus Connect middleman · ₦${Number(order.deliveryFee || 0).toLocaleString()} fee` : "Seller-to-buyer delivery"}</p>{isSeller && <p className="mt-1 text-xs text-slate-500">Campus Connect commission: ₦{Number(order.platformCommission || 0).toLocaleString()} · Your payout after OTP verification: ₦{Number(order.sellerPayoutAmount || 0).toLocaleString()}</p>}{(isSeller || (order.deliveryMethod === "MIDDLEMAN" && user.role === "admin")) && order.status === "DELIVERED" && <div className="mt-4 flex gap-2"><input inputMode="numeric" maxLength={6} value={deliveryOtpInputs[order._id] || ""} onChange={(event) => setDeliveryOtpInputs((current) => ({ ...current, [order._id]: event.target.value }))} placeholder="Buyer’s 6-digit OTP" className="min-w-0 flex-1 rounded-xl border border-slate-200 px-3 py-2 text-sm" /><button type="button" onClick={() => verifyDeliveryOtp(order._id)} className="rounded-xl bg-blue-700 px-3 py-2 text-sm font-bold text-white">Verify</button></div>}<p className="mt-3 text-xs text-slate-500">{new Date(order.createdAt).toLocaleString()}</p></article>;
+                    })}</div>}
+                  </div>
+                </div>
+              )}
+
+              {payoutSetupOpen && (
+                <div className="fixed inset-0 z-[60] flex items-end bg-slate-950/50 sm:items-center sm:justify-center sm:p-4">
+                  <form onSubmit={savePayoutAccount} className="w-full rounded-t-3xl bg-white p-5 shadow-2xl sm:max-w-lg sm:rounded-3xl sm:p-7">
+                    <div className="flex items-start justify-between gap-4"><div><h3 className="text-xl font-extrabold">Seller payout account</h3><p className="mt-1 text-sm text-slate-500">Verified through Paystack test mode. Your account number is not stored.</p></div><button type="button" onClick={() => setPayoutSetupOpen(false)} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100">✕</button></div>
+                    <div className="mt-6 space-y-4"><label><span className="mb-1.5 block text-sm font-semibold">Bank</span><select required value={payoutForm.bankCode} onChange={(event) => setPayoutForm((current) => ({ ...current, bankCode: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3"><option value="">Choose your bank</option>{banks.map((bank) => <option key={bank.code} value={bank.code}>{bank.name}</option>)}</select></label><label><span className="mb-1.5 block text-sm font-semibold">10-digit account number</span><input required inputMode="numeric" pattern="[0-9]{10}" maxLength={10} value={payoutForm.accountNumber} onChange={(event) => setPayoutForm((current) => ({ ...current, accountNumber: event.target.value.replace(/\D/g, "") }))} className="w-full rounded-xl border border-slate-200 px-4 py-3" placeholder="0123456789" /></label></div><button type="submit" disabled={marketplaceSubmitting} className="mt-6 w-full rounded-xl bg-blue-700 px-5 py-3.5 text-sm font-bold text-white disabled:opacity-60">{marketplaceSubmitting ? "Verifying..." : "Verify and save account"}</button>
+                  </form>
+                </div>
+              )}
+
+              <div className="rounded-2xl border border-blue-100 bg-blue-50 p-4">
+                <div className="flex items-start gap-3">
+                  <ShieldCheck
+                    size={22}
+                    className="mt-0.5 shrink-0 text-blue-700"
+                  />
+
+                  <div>
+                    <h4 className="font-bold text-blue-900">
+                      Shop with confidence
+                    </h4>
+
+                    <p className="mt-1 text-sm leading-6 text-blue-800">
+                      Confirm the product details before paying. Payments are
+                      processed through the secure checkout page.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </section>
+          )}
 
           {activePage !== "Home Feed" &&
             activePage !== "Campus News" &&
             activePage !== "Campus Life" &&
             activePage !== "Campus Match" &&
-            activePage !== "Profile" && (
+            activePage !== "Profile" &&
+            activePage !== "Marketplace" && (
               <div className="mb-5 rounded-2xl border border-blue-100 bg-blue-50 p-5">
                 <h3 className="font-bold text-blue-900">
                   {activePage} is ready for development
                 </h3>
 
                 <p className="mt-2 text-sm leading-6 text-blue-800">
-                  This is the initial dashboard layout. We'll build this section
-                  and connect it to the backend API in the next stages.
+                  This section will be connected to the backend in the next
+                  stages.
                 </p>
               </div>
             )}
-
-          {activePage === "Campus News" && (
-            <section className="space-y-5">
-              {newsLoading && (
-                <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center">
-                  <p className="text-sm font-medium text-slate-600">
-                    Loading campus news...
-                  </p>
-                </div>
-              )}
-
-              {!newsLoading && newsError && (
-                <div className="rounded-2xl border border-red-200 bg-red-50 p-5">
-                  <h3 className="font-bold text-red-800">
-                    Unable to load campus news
-                  </h3>
-
-                  <p className="mt-2 text-sm text-red-700">{newsError}</p>
-
-                  <button
-                    onClick={() => setActivePage("Home Feed")}
-                    className="mt-3 rounded-lg bg-red-100 px-4 py-2 text-sm font-semibold text-red-800"
-                  >
-                    Return to Home Feed
-                  </button>
-                </div>
-              )}
-
-              {!newsLoading && !newsError && campusNews.length === 0 && (
-                <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center">
-                  <Newspaper size={32} className="mx-auto text-slate-400" />
-
-                  <h3 className="mt-3 font-bold text-slate-800">
-                    No campus news yet
-                  </h3>
-
-                  <p className="mt-2 text-sm text-slate-500">
-                    News and announcements from your campus will appear here.
-                  </p>
-                </div>
-              )}
-
-              {!newsLoading &&
-                !newsError &&
-                campusNews.map((news) => (
-                  <article
-                    key={news._id}
-                    className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm"
-                  >
-                    {news.image && (
-                      <img
-                        src={
-                          news.image.startsWith("http")
-                            ? news.image
-                            : `http://localhost:5000${news.image}`
-                        }
-                        alt={news.title}
-                        className="h-56 w-full object-cover"
-                      />
-                    )}
-
-                    <div className="p-5">
-                      <div className="mb-3 flex items-center gap-2">
-                        <div className="flex h-9 w-9 items-center justify-center rounded-full bg-blue-100 text-blue-700">
-                          <Newspaper size={18} />
-                        </div>
-
-                        <div>
-                          <p className="text-sm font-bold text-slate-800">
-                            {news.author?.name || "Campus Administration"}
-                          </p>
-
-                          <p className="text-xs text-slate-500">
-                            {news.createdAt
-                              ? new Date(news.createdAt).toLocaleDateString()
-                              : "Recently published"}
-                          </p>
-                        </div>
-                      </div>
-
-                      <h3 className="text-lg font-extrabold text-slate-900">
-                        {news.title}
-                      </h3>
-
-                      <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-slate-600">
-                        {news.content}
-                      </p>
-                    </div>
-                  </article>
-                ))}
-            </section>
-          )}
-
           {activePage === "Home Feed" && (
             <>
               <div className="mb-5 flex items-center justify-between">
@@ -1583,7 +1957,6 @@ function App() {
               </div>
             </>
           )}
-
           <footer className="py-8 text-center text-xs text-slate-400">
             Campus Connect · Connecting students, building communities.
           </footer>

@@ -9,10 +9,11 @@ import {
 } from "../controllers/marketplaceController.js";
 
 import protect from "../middleware/authMiddleware.js";
+import uploadMarketplaceMedia from "../middleware/marketplaceUploadMiddleware.js";
 
 const router = express.Router();
 
-router.post("/", protect, createListing);
+router.post("/", protect, uploadMarketplaceMedia.array("media", 4), createListing);
 
 router.get("/", protect, getMarketplaceListings);
 

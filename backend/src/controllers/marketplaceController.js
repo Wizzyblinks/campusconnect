@@ -2,13 +2,33 @@ import MarketplaceListing from "../models/MarketplaceListing.js";
 
 export const createListing = async (req, res) => {
   try {
-    const { title, description, price, category, images, condition, stock } =
+    const { title, description, price, category, images, condition, stock, sellerTermsAccepted } =
       req.body;
+
+    const uploadedMedia = (req.files || []).map(
+      (file) => `/uploads/marketplace/${file.filename}`,
+    );
+    const imageUrls = Array.isArray(images)
+      ? images
+      : images
+        ? [images]
+        : [];
 
     if (!title || !description || price === undefined || !category) {
       return res.status(400).json({
         message: "Title, description, price and category are required",
       });
+    }
+
+    if (!req.user.sellerTermsAcceptedAt && sellerTermsAccepted !== "true") {
+      return res.status(400).json({
+        message: "You must accept the seller terms before publishing your first listing",
+      });
+    }
+
+    if (!req.user.sellerTermsAcceptedAt) {
+      req.user.sellerTermsAcceptedAt = new Date();
+      await req.user.save();
     }
 
     const listing = await MarketplaceListing.create({
@@ -17,11 +37,11 @@ export const createListing = async (req, res) => {
       description,
       price,
       category,
-      images: images || [],
+      images: [...imageUrls, ...uploadedMedia],
       institution: req.user.institution,
       campus: req.user.campus,
       condition: condition || "new",
-      stock: stock || 1,
+      stock: stock === undefined ? 1 : stock,
     });
 
     res.status(201).json({

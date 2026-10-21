@@ -33,6 +33,7 @@ import groupRoutes from "./routes/groupRoutes.js";
 import path from "path";
 
 import messageRoutes from "./routes/messageRoutes.js";
+import payoutRoutes from "./routes/payoutRoutes.js";
 
 const app = express();
 
@@ -69,6 +70,8 @@ app.use("/api/disputes", disputeRoutes);
 app.use("/api/groups", groupRoutes);
 
 app.use("/api/messages", messageRoutes);
+
+app.use("/api/payouts", payoutRoutes);
 
 app.get("/", (req, res) => {
   res.json({

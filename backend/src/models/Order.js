@@ -38,6 +38,20 @@ const orderSchema = new mongoose.Schema(
       min: 0,
     },
 
+    deliveryMethod: {
+      type: String,
+      enum: ["MIDDLEMAN", "SELLER_TO_BUYER"],
+      required: true,
+    },
+
+    deliveryFee: { type: Number, required: true, min: 0, default: 0 },
+
+    platformCommissionRate: { type: Number, required: true, default: 0.07 },
+
+    platformCommission: { type: Number, required: true, min: 0, default: 0 },
+
+    sellerPayoutAmount: { type: Number, required: true, min: 0, default: 0 },
+
     status: {
       type: String,
       enum: [
@@ -57,13 +71,20 @@ const orderSchema = new mongoose.Schema(
 
     paymentStatus: {
       type: String,
-      enum: ["PENDING", "PAID", "FAILED", "REFUNDED"],
+      enum: ["PENDING", "PAID", "FAILED", "REFUND_PENDING", "REFUNDED"],
       default: "PENDING",
     },
 
     deliveryStatus: {
       type: String,
-      enum: ["PENDING", "READY", "OUT_FOR_DELIVERY", "DELIVERED", "VERIFIED"],
+      enum: [
+        "PENDING",
+        "PROCESSING",
+        "READY",
+        "OUT_FOR_DELIVERY",
+        "DELIVERED",
+        "VERIFIED",
+      ],
       default: "PENDING",
     },
 
@@ -85,9 +106,10 @@ const orderSchema = new mongoose.Schema(
       maxlength: 500,
     },
 
-    deliveryOtp: {
+    deliveryOtpHash: {
       type: String,
       default: null,
+      select: false,
     },
 
     deliveryOtpExpiresAt: {
@@ -95,9 +117,20 @@ const orderSchema = new mongoose.Schema(
       default: null,
     },
 
+    deliveryOtpAttempts: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    deliveryOtpLockedUntil: {
+      type: Date,
+      default: null,
+    },
+
     sellerPayoutStatus: {
       type: String,
-      enum: ["PENDING", "RELEASED", "REFUNDED"],
+      enum: ["PENDING", "ELIGIBLE", "ON_HOLD", "RELEASED", "REFUNDED"],
       default: "PENDING",
     },
 

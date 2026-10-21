@@ -28,7 +28,7 @@ const paymentSchema = new mongoose.Schema(
 
     status: {
       type: String,
-      enum: ["PENDING", "SUCCESS", "FAILED", "REFUNDED"],
+      enum: ["PENDING", "SUCCESS", "REFUND_PENDING", "REFUNDED", "FAILED"],
       default: "PENDING",
     },
 
@@ -41,11 +41,38 @@ const paymentSchema = new mongoose.Schema(
     provider: {
       type: String,
       enum: ["TEST", "PAYSTACK", "FLUTTERWAVE"],
-      default: "TEST",
+      default: "PAYSTACK",
+    },
+
+    authorizationUrl: {
+      type: String,
+      default: null,
+    },
+
+    accessCode: {
+      type: String,
+      default: null,
     },
 
     paidAt: {
       type: Date,
+      default: null,
+    },
+
+    refundId: {
+      type: Number,
+      default: null,
+    },
+
+    refundAmount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    refundStatus: {
+      type: String,
+      enum: ["PENDING", "PROCESSED", "FAILED"],
       default: null,
     },
   },
