@@ -1,8 +1,11 @@
 import { useEffect, useState } from "react";
-import { apiRequest } from "./services/api.js";
-import CampusLife3D from "./CampusLife3D.jsx";
+import { io } from "socket.io-client";
+import { API_URL, apiRequest } from "./services/api.js";
 import Auth from "./Auth.jsx";
-import CampusLifeGame from "./CampusLifeGame.jsx";
+import { CampusServices } from "./CampusServices.jsx";
+import Messages from "./Messages.jsx";
+import AdminDashboard from "./AdminDashboard.jsx";
+import campusConnectLogo from "./assets/cclogo.jpeg";
 import {
   Home,
   ShoppingBag,
@@ -11,7 +14,7 @@ import {
   MessageCircle,
   Users,
   Utensils,
-  Gamepad2,
+  Store,
   Bell,
   Search,
   Settings,
@@ -36,11 +39,12 @@ const navigation = [
   { name: "Marketplace", icon: ShoppingBag },
   { name: "Study Centre", icon: BookOpen },
   { name: "Campus News", icon: Newspaper },
-  { name: "Messages", icon: MessageCircle, badge: "3" },
+  { name: "Messages", icon: MessageCircle },
   { name: "Communities", icon: Users },
   { name: "Cafeteria", icon: Utensils },
-  { name: "Campus Life", icon: Gamepad2 },
-  { name: "Campus Match", icon: Heart, highlight: true },
+  { name: "Campus Services", icon: Store },
+  { name: "Campus Match", label: "VibeCheck", icon: Heart, highlight: true },
+  { name: "Admin Dashboard", icon: ShieldCheck, adminOnly: true },
 ];
 
 const initialPosts = [
@@ -92,123 +96,6 @@ const trends = [
   { tag: "#StudentOpportunities", posts: "740 posts" },
 ];
 
-const campusLocations = [
-  {
-    name: "Main Gate",
-    description: "The main entrance and security post.",
-    icon: "🚪",
-  },
-  {
-    name: "Football Field",
-    description: "Meet friends, play football, and enjoy campus sports.",
-    icon: "⚽",
-  },
-  {
-    name: "Admin Block",
-    description: "The administrative centre of the university.",
-    icon: "🏢",
-  },
-  {
-    name: "GAAB",
-    description: "One of the university's academic buildings.",
-    icon: "📚",
-  },
-  {
-    name: "Radio Station",
-    description: "The campus broadcasting station.",
-    icon: "📻",
-  },
-  {
-    name: "Staff Lodge",
-    description: "Accommodation for university staff.",
-    icon: "🏠",
-  },
-  {
-    name: "NAS Block",
-    description: "An academic building on campus.",
-    icon: "🏫",
-  },
-  {
-    name: "VC Block",
-    description: "The Vice-Chancellor's administrative block.",
-    icon: "🏛️",
-  },
-  {
-    name: "Girls' Hostel",
-    description: "Student accommodation.",
-    icon: "🏢",
-  },
-  {
-    name: "Courts",
-    description: "Outdoor spaces for recreational activities.",
-    icon: "🏀",
-  },
-  {
-    name: "Cafeteria",
-    description: "Get food and refreshments.",
-    icon: "🍲",
-  },
-  {
-    name: "RU Hospital",
-    description: "The university hospital, housed in a bungalow.",
-    icon: "🏥",
-  },
-  {
-    name: "Boys' Hostel",
-    description: "A three-storey student accommodation building.",
-    icon: "🏢",
-  },
-  {
-    name: "Poultry",
-    description: "The university poultry area.",
-    icon: "🐔",
-  },
-  {
-    name: "Empty Land",
-    description: "An open area on campus.",
-    icon: "🌳",
-  },
-];
-
-const demoMatchProfiles = [
-  {
-    id: 1,
-    name: "Amara",
-    age: 22,
-    campus: "Ritman University",
-    department: "Computer Science",
-    level: "400 Level",
-    interests: ["Technology", "Music", "Movies"],
-    initials: "AM",
-    color: "bg-pink-100 text-pink-700",
-    bio: "Tech enthusiast who enjoys music, meaningful conversations, and meeting new people.",
-  },
-  {
-    id: 2,
-    name: "David",
-    age: 23,
-    campus: "University of Uyo",
-    department: "Software Engineering",
-    level: "300 Level",
-    interests: ["Coding", "Football", "Gaming"],
-    initials: "DA",
-    color: "bg-blue-100 text-blue-700",
-    bio: "Developer in the making. I love football, gaming, and connecting with ambitious people.",
-  },
-  {
-    id: 3,
-    name: "Esther",
-    age: 21,
-    campus: "Ritman University",
-    department: "Mass Communication",
-    level: "300 Level",
-    interests: ["Photography", "Travel", "Fashion"],
-    initials: "ES",
-    color: "bg-purple-100 text-purple-700",
-    bio: "Creative soul interested in photography, exploring new places, and meeting genuine people.",
-  },
-];
-
 function getSavedUser() {
   try {
     const token = localStorage.getItem("token");
@@ -231,7 +118,7 @@ const bottomNavigation = [
   { label: "Home", page: "Home Feed", icon: Home },
   { label: "Marketplace", page: "Marketplace", icon: ShoppingBag },
   { label: "Campus News", page: "Campus News", icon: Newspaper },
-  { label: "Campus Life", page: "Campus Life", icon: Gamepad2 },
+  { label: "Campus Services", page: "Campus Services", icon: Store },
   { label: "Profile", page: "Profile", icon: UserRound },
 ];
 
@@ -243,14 +130,31 @@ function App() {
   const [posts, setPosts] = useState(initialPosts);
   const [newPost, setNewPost] = useState("");
   const [search, setSearch] = useState("");
-  const [selectedLocation, setSelectedLocation] = useState(null);
-
+  const [unreadMessages, setUnreadMessages] = useState(0);
+  const [messageSocket, setMessageSocket] = useState(null);
   const [campusNews, setCampusNews] = useState([]);
   const [newsLoading, setNewsLoading] = useState(false);
   const [newsError, setNewsError] = useState("");
 
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+
+  useEffect(() => {
+    const token = localStorage.getItem("token");
+    if (!user || !token) {
+      setMessageSocket(null);
+      return undefined;
+    }
+    const socket = io(API_URL, {
+      auth: { token },
+      transports: ["websocket", "polling"],
+    });
+    setMessageSocket(socket);
+    return () => {
+      socket.disconnect();
+      setMessageSocket(null);
+    };
+  }, [user]);
 
   const [notifications, setNotifications] = useState([
     {
@@ -262,7 +166,7 @@ function App() {
     },
     {
       id: 2,
-      title: "Discover Campus Match",
+      title: "Discover VibeCheck",
       message: "Find students who share your interests.",
       time: "Today",
       read: false,
@@ -276,11 +180,25 @@ function App() {
     },
   ]);
 
-  const [matchProfiles, setMatchProfiles] = useState(demoMatchProfiles);
-  const [passedProfiles, setPassedProfiles] = useState([]);
-  const [likedProfiles, setLikedProfiles] = useState([]);
-  const [matchCampusFilter, setMatchCampusFilter] = useState("All campuses");
+  const [matchProfiles, setMatchProfiles] = useState([]);
+  const [matchConnections, setMatchConnections] = useState([]);
+  const [matchCampuses, setMatchCampuses] = useState([]);
+  const [matchEnabled, setMatchEnabled] = useState(false);
+  const [matchEligible, setMatchEligible] = useState(false);
+  const [matchInterestsInput, setMatchInterestsInput] = useState("");
+  const [matchConsentAccepted, setMatchConsentAccepted] = useState(false);
+  const [matchCampusFilter, setMatchCampusFilter] = useState("");
   const [matchInterestFilter, setMatchInterestFilter] = useState("");
+  const [matchLoading, setMatchLoading] = useState(false);
+  const [matchLoaded, setMatchLoaded] = useState(false);
+  const [matchError, setMatchError] = useState("");
+  const [matchNotice, setMatchNotice] = useState("");
+  const [matchRefreshVersion, setMatchRefreshVersion] = useState(0);
+  const [matchActionLoading, setMatchActionLoading] = useState("");
+  const [matchPreferencesSaving, setMatchPreferencesSaving] = useState(false);
+  const [matchReportProfile, setMatchReportProfile] = useState(null);
+  const [matchReportReason, setMatchReportReason] = useState("HARASSMENT");
+  const [matchReportDetails, setMatchReportDetails] = useState("");
 
   const [marketplaceListings, setMarketplaceListings] = useState([]);
   const [marketplaceLoading, setMarketplaceLoading] = useState(false);
@@ -421,6 +339,79 @@ function App() {
   }, [activePage, user]);
 
   useEffect(() => {
+    if (!user || activePage !== "Campus Match") {
+      return;
+    }
+
+    let cancelled = false;
+    const params = new URLSearchParams();
+    if (matchCampusFilter) {
+      params.set("campusId", matchCampusFilter);
+    }
+    if (matchInterestFilter.trim()) {
+      params.set("interest", matchInterestFilter.trim());
+    }
+    const query = params.toString();
+    setMatchLoaded(false);
+    setMatchLoading(true);
+    setMatchProfiles([]);
+    setMatchConnections([]);
+    setMatchEnabled(false);
+    setMatchEligible(false);
+
+    async function loadVibeCheck() {
+      setMatchLoading(true);
+      setMatchError("");
+
+      try {
+        const data = await apiRequest(
+          `/api/matching${query ? `?${query}` : ""}`,
+        );
+
+        if (!cancelled) {
+          setMatchEligible(Boolean(data.eligible));
+          setMatchEnabled(Boolean(data.enabled));
+          setMatchInterestsInput(
+            Array.isArray(data.interests) ? data.interests.join(", ") : "",
+          );
+          setMatchCampuses(Array.isArray(data.campuses) ? data.campuses : []);
+          setMatchProfiles(
+            Array.isArray(data.profiles) ? data.profiles : [],
+          );
+          setMatchConnections(
+            Array.isArray(data.matches) ? data.matches : [],
+          );
+          setMatchLoaded(true);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setMatchError(error.message || "Could not load VibeCheck profiles.");
+          setMatchProfiles([]);
+          setMatchConnections([]);
+          setMatchLoaded(true);
+        }
+      } finally {
+        if (!cancelled) {
+          setMatchLoading(false);
+        }
+      }
+    }
+
+    const debounce = window.setTimeout(loadVibeCheck, 250);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(debounce);
+    };
+  }, [
+    activePage,
+    matchCampusFilter,
+    matchInterestFilter,
+    matchRefreshVersion,
+    user,
+  ]);
+
+  useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const reference = params.get("reference");
 
@@ -553,7 +544,6 @@ function App() {
     setNewsError("");
     setLikedPosts([]);
     setMobileMenuOpen(false);
-    setSelectedLocation(null);
     setNotificationsOpen(false);
     setProfileMenuOpen(false);
   }
@@ -602,34 +592,110 @@ function App() {
     setActivePage("Home Feed");
   }
 
-  function handleLikeProfile(profileId) {
-    setLikedProfiles((previous) =>
-      previous.includes(profileId) ? previous : [...previous, profileId],
-    );
+  async function saveVibeCheckPreferences(enabled) {
+    const interests = [
+      ...new Set(
+        matchInterestsInput
+          .split(",")
+          .map((interest) => interest.trim())
+          .filter(Boolean),
+      ),
+    ];
 
-    setMatchProfiles((previous) =>
-      previous.filter((profile) => profile.id !== profileId),
-    );
+    if (interests.length > 10 || interests.some((interest) => interest.length > 32)) {
+      setMatchError("Enter up to 10 interests, each no longer than 32 characters.");
+      return;
+    }
+
+    setMatchPreferencesSaving(true);
+    setMatchError("");
+
+    try {
+      const data = await apiRequest("/api/matching/preferences", {
+        method: "PATCH",
+        body: JSON.stringify({
+          enabled,
+          interests,
+          consentAccepted: enabled && matchConsentAccepted,
+        }),
+      });
+      setMatchEnabled(data.enabled);
+      setMatchNotice(data.message || "VibeCheck settings updated.");
+      setMatchConsentAccepted(false);
+      setMatchRefreshVersion((current) => current + 1);
+    } catch (error) {
+      setMatchError(error.message || "Could not update VibeCheck settings.");
+    } finally {
+      setMatchPreferencesSaving(false);
+    }
+  }
+
+  async function handleProfileAction(profileId, action) {
+    setMatchActionLoading(profileId);
+    setMatchError("");
+    setMatchNotice("");
+
+    try {
+      const data = await apiRequest(
+        `/api/matching/profiles/${profileId}/actions`,
+        {
+          method: "POST",
+          body: JSON.stringify({ action }),
+        },
+      );
+      setMatchNotice(data.message || "VibeCheck action saved.");
+      setMatchRefreshVersion((current) => current + 1);
+    } catch (error) {
+      setMatchError(error.message || "Could not save that VibeCheck action.");
+    } finally {
+      setMatchActionLoading("");
+    }
+  }
+
+  function handleLikeProfile(profileId) {
+    return handleProfileAction(profileId, "LIKE");
   }
 
   function handlePassProfile(profileId) {
-    setPassedProfiles((previous) =>
-      previous.includes(profileId) ? previous : [...previous, profileId],
-    );
+    return handleProfileAction(profileId, "PASS");
+  }
 
-    setMatchProfiles((previous) =>
-      previous.filter((profile) => profile.id !== profileId),
-    );
+  function handleBlockProfile(profileId) {
+    if (!window.confirm("Block this student from seeing your VibeCheck profile?")) {
+      return;
+    }
+
+    return handleProfileAction(profileId, "BLOCK");
+  }
+
+  async function submitVibeCheckReport(event) {
+    event.preventDefault();
+    if (!matchReportProfile) return;
+
+    setMatchError("");
+    try {
+      const data = await apiRequest(
+        `/api/matching/profiles/${matchReportProfile}/report`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            reason: matchReportReason,
+            details: matchReportDetails.trim(),
+          }),
+        },
+      );
+      setMatchNotice(data.message || "Report submitted for review.");
+      setMatchReportProfile(null);
+      setMatchReportDetails("");
+    } catch (error) {
+      setMatchError(error.message || "Could not submit the report.");
+    }
   }
 
   function resetMatchDiscovery() {
-    setMatchProfiles(
-      demoMatchProfiles.filter(
-        (profile) =>
-          !likedProfiles.includes(profile.id) &&
-          !passedProfiles.includes(profile.id),
-      ),
-    );
+    setMatchCampusFilter("");
+    setMatchInterestFilter("");
+    setMatchRefreshVersion((current) => current + 1);
   }
 
   function markNotificationsRead() {
@@ -663,29 +729,6 @@ function App() {
       post.name.toLowerCase().includes(query) ||
       post.university.toLowerCase().includes(query)
     );
-  });
-
-  const filteredLocations = campusLocations.filter((location) => {
-    const query = search.toLowerCase();
-
-    return (
-      location.name.toLowerCase().includes(query) ||
-      location.description.toLowerCase().includes(query)
-    );
-  });
-
-  const filteredMatchProfiles = matchProfiles.filter((profile) => {
-    const matchesCampus =
-      matchCampusFilter === "All campuses" ||
-      profile.campus === matchCampusFilter;
-
-    const matchesInterest =
-      !matchInterestFilter.trim() ||
-      profile.interests.some((interest) =>
-        interest.toLowerCase().includes(matchInterestFilter.toLowerCase()),
-      );
-
-    return matchesCampus && matchesInterest;
   });
 
   const filteredMarketplaceListings = marketplaceListings.filter((listing) => {
@@ -734,9 +777,11 @@ function App() {
               {mobileMenuOpen ? <X size={22} /> : <Menu size={22} />}
             </button>
 
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-700 text-white">
-              <GraduationCap size={25} />
-            </div>
+            <img
+              src={campusConnectLogo}
+              alt="Campus Connect logo"
+              className="h-10 w-10 rounded-xl bg-white object-contain"
+            />
 
             <div>
               <h1 className="text-lg font-extrabold tracking-tight text-blue-700 sm:text-xl">
@@ -779,7 +824,11 @@ function App() {
               }`}
             >
               <MessageCircle size={21} />
-              <span className="absolute right-1 top-1 h-2 w-2 rounded-full bg-red-500 ring-2 ring-white" />
+              {unreadMessages > 0 && (
+                <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white ring-2 ring-white">
+                  {unreadMessages > 99 ? "99+" : unreadMessages}
+                </span>
+              )}
             </button>
 
             <button
@@ -789,8 +838,8 @@ function App() {
                 setMobileMenuOpen(false);
                 setNotificationsOpen(false);
               }}
-              aria-label="Campus Match"
-              title="Campus Match"
+              aria-label="VibeCheck"
+              title="VibeCheck"
               className={`rounded-xl p-2.5 transition ${
                 activePage === "Campus Match"
                   ? "bg-pink-50 text-pink-600"
@@ -970,7 +1019,9 @@ function App() {
           </p>
 
           <nav className="space-y-1">
-            {navigation.map((item) => {
+            {navigation
+              .filter((item) => !item.adminOnly || user.role === "admin")
+              .map((item) => {
               const Icon = item.icon;
               const isActive = activePage === item.name;
 
@@ -980,7 +1031,6 @@ function App() {
                   onClick={() => {
                     setActivePage(item.name);
                     setMobileMenuOpen(false);
-                    setSelectedLocation(null);
                   }}
                   className={`flex w-full items-center justify-between rounded-xl px-3 py-3 text-sm font-medium transition ${
                     isActive
@@ -994,10 +1044,11 @@ function App() {
                 >
                   <span className="flex items-center gap-3">
                     <Icon size={19} />
-                    {item.name}
+                    {item.label || item.name}
                   </span>
 
-                  {item.badge && (
+                  {(item.badge ||
+                    (item.name === "Messages" && unreadMessages > 0)) && (
                     <span
                       className={`rounded-full px-2 py-0.5 text-xs ${
                         isActive
@@ -1005,7 +1056,8 @@ function App() {
                           : "bg-orange-100 text-orange-700"
                       }`}
                     >
-                      {item.badge}
+                      {item.badge ||
+                        (unreadMessages > 99 ? "99+" : unreadMessages)}
                     </span>
                   )}
                 </button>
@@ -1084,21 +1136,35 @@ function App() {
             <h2 className="text-2xl font-extrabold tracking-tight sm:text-3xl">
               {activePage === "Home Feed"
                 ? "Your Campus, Your World 👋"
-                : activePage}
+                : activePage === "Campus Match"
+                  ? "VibeCheck"
+                  : activePage}
             </h2>
 
             <p className="mt-2 text-sm leading-6 text-slate-500">
               {activePage === "Home Feed"
                 ? "Connect with students and discover what is happening across campuses."
-                : activePage === "Campus Life"
-                  ? "Explore your campus, discover locations, and plan your campus adventures."
+                : activePage === "Campus Services"
+                  ? "Find local services, businesses, and essentials around your campus."
                   : activePage === "Campus Match"
                     ? "Discover students who share your interests."
                     : `Explore ${activePage.toLowerCase()} on Campus Connect.`}
             </p>
           </div>
 
-          {activePage === "Campus Life" && <CampusLife3D />}
+          {activePage === "Campus Services" && <CampusServices />}
+
+          {activePage === "Messages" && (
+            <Messages
+              user={user}
+              socket={messageSocket}
+              onUnreadCount={setUnreadMessages}
+            />
+          )}
+
+          {activePage === "Admin Dashboard" && (
+            <AdminDashboard />
+          )}
 
           {activePage === "Campus Match" && (
             <section className="space-y-6">
@@ -1107,7 +1173,7 @@ function App() {
                   <div>
                     <div className="mb-3 inline-flex items-center gap-2 rounded-full bg-white/20 px-3 py-1.5 text-xs font-bold">
                       <Heart size={15} />
-                      CAMPUS MATCH
+                      VIBECHECK
                     </div>
 
                     <h3 className="text-2xl font-extrabold sm:text-3xl">
@@ -1127,11 +1193,170 @@ function App() {
                 </div>
               </div>
 
+              {matchError && (
+                <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">
+                  {matchError}
+                </div>
+              )}
+
+              {matchNotice && (
+                <div className="rounded-xl border border-green-200 bg-green-50 p-4 text-sm text-green-800">
+                  {matchNotice}
+                </div>
+              )}
+
+              {!matchLoaded && matchLoading && (
+                <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500">
+                  Loading VibeCheck...
+                </div>
+              )}
+
+              {matchLoaded && !matchEligible && !matchError && (
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5">
+                  <h3 className="font-extrabold text-amber-950">
+                    VibeCheck is unavailable
+                  </h3>
+                  <p className="mt-2 text-sm leading-6 text-amber-900">
+                    VibeCheck is unavailable for this account right now. Please
+                    try again later.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setMatchRefreshVersion((current) => current + 1)}
+                    className="mt-4 rounded-xl bg-amber-800 px-4 py-2.5 text-sm font-bold text-white hover:bg-amber-900"
+                  >
+                    Try again
+                  </button>
+                  {matchEnabled && (
+                    <button
+                      type="button"
+                      disabled={matchPreferencesSaving}
+                      onClick={() => saveVibeCheckPreferences(false)}
+                      className="ml-3 mt-4 rounded-xl border border-amber-800 px-4 py-2.5 text-sm font-bold text-amber-900 disabled:opacity-60"
+                    >
+                      Opt out
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {matchLoaded && matchEligible && (
+                <div className="rounded-2xl border border-slate-200 bg-white p-5">
+                  <h3 className="font-extrabold">
+                    {matchEnabled ? "Your VibeCheck profile" : "Join VibeCheck"}
+                  </h3>
+                  <p className="mt-1 text-sm leading-6 text-slate-600">
+                    {matchEnabled
+                      ? "Only students at your institution who have opted in can see your profile. You can opt out at any time."
+                      : "Opt in to meet students at your institution. Your name, photo, campus, department, level, bio, and interests may be shown; your email and phone number are never shared."}
+                  </p>
+                  <label className="mt-4 block">
+                    <span className="mb-1.5 block text-sm font-semibold">
+                      Interests (comma-separated, up to 10)
+                    </span>
+                    <input
+                      value={matchInterestsInput}
+                      onChange={(event) =>
+                        setMatchInterestsInput(event.target.value)
+                      }
+                      maxLength={340}
+                      placeholder="e.g. football, music, volunteering"
+                      className="w-full rounded-xl border border-slate-200 px-3 py-3 text-sm outline-none focus:border-pink-400 focus:ring-2 focus:ring-pink-100"
+                    />
+                  </label>
+                  {matchEnabled ? (
+                    <div className="mt-4 flex flex-wrap gap-3">
+                      <button
+                        type="button"
+                        disabled={matchPreferencesSaving}
+                        onClick={() => saveVibeCheckPreferences(true)}
+                        className="rounded-xl bg-pink-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-pink-700 disabled:opacity-60"
+                      >
+                        {matchPreferencesSaving ? "Saving..." : "Save interests"}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={matchPreferencesSaving}
+                        onClick={() => saveVibeCheckPreferences(false)}
+                        className="rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                      >
+                        Opt out
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <label className="mt-4 flex items-start gap-3 text-sm leading-6 text-slate-700">
+                        <input
+                          required
+                          type="checkbox"
+                          checked={matchConsentAccepted}
+                          onChange={(event) =>
+                            setMatchConsentAccepted(event.target.checked)
+                          }
+                          className="mt-1 h-4 w-4"
+                        />
+                        <span>
+                          I agree to show this profile information to other
+                          VibeCheck students at my institution. I can turn
+                          visibility off at any time.
+                        </span>
+                      </label>
+                      <button
+                        type="button"
+                        disabled={!matchConsentAccepted || matchPreferencesSaving}
+                        onClick={() => saveVibeCheckPreferences(true)}
+                        className="mt-4 rounded-xl bg-pink-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-pink-700 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {matchPreferencesSaving ? "Joining..." : "Opt in"}
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {matchEnabled && matchConnections.length > 0 && (
+                <div className="rounded-2xl border border-pink-200 bg-pink-50 p-5">
+                  <h3 className="font-extrabold text-pink-950">
+                    Your mutual connections
+                  </h3>
+                  <p className="mt-1 text-sm text-pink-800">
+                    You and these students have both liked each other.
+                  </p>
+                  <div className="mt-4 flex flex-wrap gap-3">
+                    {matchConnections.map((profile) => (
+                      <div
+                        key={profile.id}
+                        className="flex items-center gap-2 rounded-xl bg-white px-3 py-2 text-sm font-semibold text-slate-800"
+                      >
+                        {profile.avatar ? (
+                          <img
+                            src={profile.avatar}
+                            alt=""
+                            className="h-8 w-8 rounded-full object-cover"
+                          />
+                        ) : (
+                          <span className="flex h-8 w-8 items-center justify-center rounded-full bg-pink-100 font-bold text-pink-700">
+                            {profile.name
+                              .split(" ")
+                              .map((part) => part[0])
+                              .slice(0, 2)
+                              .join("")
+                              .toUpperCase()}
+                          </span>
+                        )}
+                        {profile.name}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {matchEnabled && (
               <div className="rounded-2xl border border-slate-200 bg-white p-5">
                 <h3 className="font-extrabold">Discover students</h3>
 
                 <p className="mt-1 text-sm text-slate-500">
-                  Filter profiles by campus or shared interests.
+                  Filter opted-in student profiles by campus or shared interests.
                 </p>
 
                 <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -1151,9 +1376,12 @@ function App() {
                       }
                       className="w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm outline-none focus:border-pink-400 focus:ring-2 focus:ring-pink-100"
                     >
-                      <option>All campuses</option>
-                      <option>Ritman University</option>
-                      <option>University of Uyo</option>
+                      <option value="">All campuses</option>
+                      {matchCampuses.map((campus) => (
+                        <option key={campus.id} value={campus.id}>
+                          {campus.name}
+                        </option>
+                      ))}
                     </select>
                   </div>
 
@@ -1177,32 +1405,48 @@ function App() {
                   </div>
                 </div>
               </div>
+              )}
 
               <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
-                {filteredMatchProfiles.map((profile) => (
+                {matchEnabled && matchProfiles.map((profile) => (
                   <article
                     key={profile.id}
                     className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm transition hover:-translate-y-1 hover:shadow-md"
                   >
                     <div className="flex items-center gap-4 border-b border-slate-100 p-5">
-                      <div
-                        className={`flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl text-xl font-extrabold ${profile.color}`}
-                      >
-                        {profile.initials}
-                      </div>
+                      {profile.avatar ? (
+                        <img
+                          src={profile.avatar}
+                          alt=""
+                          className="h-16 w-16 shrink-0 rounded-2xl object-cover"
+                        />
+                      ) : (
+                        <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl bg-pink-100 text-xl font-extrabold text-pink-700">
+                          {profile.name
+                            .split(" ")
+                            .map((part) => part[0])
+                            .slice(0, 2)
+                            .join("")
+                            .toUpperCase()}
+                        </div>
+                      )}
 
                       <div className="min-w-0 flex-1">
                         <h3 className="text-lg font-extrabold">
-                          {profile.name}, {profile.age}
+                          {profile.name}
                         </h3>
 
-                        <p className="mt-1 text-sm text-slate-500">
-                          {profile.department}
-                        </p>
+                        {profile.department && (
+                          <p className="mt-1 text-sm text-slate-500">
+                            {profile.department}
+                          </p>
+                        )}
 
-                        <p className="mt-1 text-xs text-slate-400">
-                          {profile.level}
-                        </p>
+                        {profile.level && (
+                          <p className="mt-1 text-xs text-slate-400">
+                            {profile.level}
+                          </p>
+                        )}
                       </div>
 
                       <Heart className="shrink-0 text-pink-500" size={22} />
@@ -1235,6 +1479,7 @@ function App() {
 
                       <div className="mt-5 grid grid-cols-2 gap-3">
                         <button
+                          disabled={matchActionLoading === profile.id}
                           onClick={() => handlePassProfile(profile.id)}
                           className="flex items-center justify-center gap-2 rounded-xl border border-slate-200 px-4 py-3 text-sm font-bold text-slate-600 transition hover:bg-slate-50"
                         >
@@ -1243,19 +1488,104 @@ function App() {
                         </button>
 
                         <button
+                          disabled={matchActionLoading === profile.id}
                           onClick={() => handleLikeProfile(profile.id)}
-                          className="flex items-center justify-center gap-2 rounded-xl bg-pink-600 px-4 py-3 text-sm font-bold text-white transition hover:bg-pink-700"
+                          className="flex items-center justify-center gap-2 rounded-xl bg-pink-600 px-4 py-3 text-sm font-bold text-white transition hover:bg-pink-700 disabled:opacity-60"
                         >
                           <Heart size={17} />
-                          Like
+                          {matchActionLoading === profile.id
+                            ? "Saving..."
+                            : "Like"}
                         </button>
                       </div>
+
+                      <div className="mt-3 flex justify-end gap-4 text-xs font-semibold">
+                        <button
+                          type="button"
+                          disabled={matchActionLoading === profile.id}
+                          onClick={() => handleBlockProfile(profile.id)}
+                          className="text-slate-500 hover:text-red-700 disabled:opacity-50"
+                        >
+                          Block
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setMatchReportProfile(profile.id);
+                            setMatchReportReason("HARASSMENT");
+                            setMatchReportDetails("");
+                          }}
+                          className="text-slate-500 hover:text-red-700"
+                        >
+                          Report
+                        </button>
+                      </div>
+
+                      {matchReportProfile === profile.id && (
+                        <form
+                          onSubmit={submitVibeCheckReport}
+                          className="mt-4 space-y-3 rounded-xl border border-red-100 bg-red-50 p-3"
+                        >
+                          <label className="block text-xs font-semibold text-slate-700">
+                            Report reason
+                            <select
+                              value={matchReportReason}
+                              onChange={(event) =>
+                                setMatchReportReason(event.target.value)
+                              }
+                              className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
+                            >
+                              <option value="HARASSMENT">Harassment</option>
+                              <option value="SPAM">Spam</option>
+                              <option value="IMPERSONATION">Impersonation</option>
+                              <option value="INAPPROPRIATE">Inappropriate content</option>
+                              <option value="OTHER">Other</option>
+                            </select>
+                          </label>
+                          <label className="block text-xs font-semibold text-slate-700">
+                            Additional details (optional)
+                            <textarea
+                              value={matchReportDetails}
+                              onChange={(event) =>
+                                setMatchReportDetails(event.target.value)
+                              }
+                              maxLength={500}
+                              rows={3}
+                              className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
+                            />
+                          </label>
+                          <div className="flex justify-end gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setMatchReportProfile(null)}
+                              className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-bold"
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="submit"
+                              className="rounded-lg bg-red-700 px-3 py-2 text-xs font-bold text-white"
+                            >
+                              Submit report
+                            </button>
+                          </div>
+                        </form>
+                      )}
                     </div>
                   </article>
                 ))}
               </div>
 
-              {filteredMatchProfiles.length === 0 && (
+              {matchEnabled && matchLoading && (
+                <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500">
+                  Loading opted-in student profiles...
+                </div>
+              )}
+
+              {matchEnabled &&
+                !matchLoading &&
+                !matchError &&
+                matchProfiles.length === 0 && (
                 <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center">
                   <Heart size={36} className="mx-auto text-pink-400" />
 
@@ -1263,15 +1593,11 @@ function App() {
 
                   <p className="mt-2 text-sm leading-6 text-slate-500">
                     Try changing your filters or check back when more students
-                    are available.
+                    opt in.
                   </p>
 
                   <button
-                    onClick={() => {
-                      setMatchCampusFilter("All campuses");
-                      setMatchInterestFilter("");
-                      resetMatchDiscovery();
-                    }}
+                    onClick={resetMatchDiscovery}
                     className="mt-4 rounded-xl bg-pink-600 px-5 py-3 text-sm font-bold text-white transition hover:bg-pink-700"
                   >
                     Refresh discovery
@@ -1292,11 +1618,12 @@ function App() {
                     </h4>
 
                     <p className="mt-1 text-sm leading-6 text-amber-800">
-                      These are demonstration profiles, not real student
-                      accounts. Likes do not create a real match or send
-                      messages. Before launch, Campus Match should use
-                      consenting, eligible adult users and provide blocking,
-                      reporting, and privacy controls.
+                      Profiles are visible only to students at your institution
+                      who have opted in, whether or not they are verified.
+                      Likes create a mutual connection only when both students
+                      like each other. Blocked profiles stay hidden, and
+                      reports are submitted for review. You can opt out at any
+                      time.
                     </p>
                   </div>
                 </div>
@@ -1751,7 +2078,7 @@ function App() {
                       <label><span className="mb-1.5 block text-sm font-semibold">Quantity available</span><input required min="1" step="1" type="number" value={listingForm.stock} onChange={(event) => setListingForm((current) => ({ ...current, stock: event.target.value }))} className="w-full rounded-xl border border-slate-200 px-4 py-3 outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100" /></label>
                       <label><span className="mb-1.5 block text-sm font-semibold">Category</span><select value={listingForm.category} onChange={(event) => setListingForm((current) => ({ ...current, category: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 outline-none focus:border-blue-600"><option value="electronics">Electronics</option><option value="fashion">Fashion</option><option value="books">Books</option><option value="food">Food</option><option value="services">Services</option><option value="school_items">School Items</option><option value="others">Others</option></select></label>
                       <label><span className="mb-1.5 block text-sm font-semibold">Condition</span><select value={listingForm.condition} onChange={(event) => setListingForm((current) => ({ ...current, condition: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 outline-none focus:border-blue-600"><option value="new">New</option><option value="used">Used</option><option value="fair">Fair</option></select></label>
-                      <label className="sm:col-span-2"><span className="mb-1.5 block text-sm font-semibold">Photos or video <span className="font-normal text-slate-400">(up to 4 files, 25 MB each)</span></span><input type="file" accept="image/*,video/*" multiple onChange={(event) => setListingForm((current) => ({ ...current, media: Array.from(event.target.files || []) }))} className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm file:mr-4 file:rounded-lg file:border-0 file:bg-blue-50 file:px-3 file:py-2 file:font-semibold file:text-blue-700" /></label>
+                      <label className="sm:col-span-2"><span className="mb-1.5 block text-sm font-semibold">Photos <span className="font-normal text-slate-400">(up to 4 files, 25 MB each)</span></span><input type="file" accept="image/*" multiple onChange={(event) => setListingForm((current) => ({ ...current, media: Array.from(event.target.files || []) }))} className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm file:mr-4 file:rounded-lg file:border-0 file:bg-blue-50 file:px-3 file:py-2 file:font-semibold file:text-blue-700" /></label>
                       <label className="sm:col-span-2 flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950"><input required type="checkbox" checked={listingForm.sellerTermsAccepted} onChange={(event) => setListingForm((current) => ({ ...current, sellerTermsAccepted: event.target.checked }))} className="mt-0.5 h-4 w-4" /><span>I confirm that this listing is genuine, I will not engage in fraudulent activity, and I accept Campus Connect’s 7% commission on each completed sale plus any applicable marketplace terms.</span></label>
                     </div>
                     <button type="submit" disabled={marketplaceSubmitting} className="mt-6 w-full rounded-xl bg-blue-700 px-5 py-3.5 text-sm font-bold text-white hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-60">{marketplaceSubmitting ? "Publishing..." : "Publish listing"}</button>
@@ -1820,8 +2147,10 @@ function App() {
 
           {activePage !== "Home Feed" &&
             activePage !== "Campus News" &&
-            activePage !== "Campus Life" &&
+            activePage !== "Campus Services" &&
             activePage !== "Campus Match" &&
+            activePage !== "Messages" &&
+            activePage !== "Admin Dashboard" &&
             activePage !== "Profile" &&
             activePage !== "Marketplace" && (
               <div className="mb-5 rounded-2xl border border-blue-100 bg-blue-50 p-5">
@@ -2081,18 +2410,18 @@ function App() {
               </button>
 
               <button
-                onClick={() => setActivePage("Campus Life")}
+                onClick={() => setActivePage("Campus Services")}
                 className="flex w-full items-center gap-3 rounded-xl p-3 text-left hover:bg-slate-50"
               >
                 <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-50 text-blue-700">
-                  <Gamepad2 size={19} />
+                  <Store size={19} />
                 </div>
 
                 <div>
-                  <p className="text-sm font-semibold">Campus Life</p>
+                  <p className="text-sm font-semibold">Campus Services</p>
 
                   <p className="mt-1 text-xs text-slate-500">
-                    Explore campus locations
+                    Find local businesses and essential services
                   </p>
                 </div>
               </button>
@@ -2106,7 +2435,7 @@ function App() {
                 </div>
 
                 <div>
-                  <p className="text-sm font-semibold">Campus Match</p>
+                  <p className="text-sm font-semibold">VibeCheck</p>
 
                   <p className="mt-1 text-xs text-slate-500">
                     Discover shared interests
@@ -2132,7 +2461,6 @@ function App() {
                   setActivePage(item.page);
                   setMobileMenuOpen(false);
                   setNotificationsOpen(false);
-                  setSelectedLocation(null);
                 }}
                 className={`relative flex min-w-[68px] flex-1 flex-col items-center justify-center gap-1 py-3 transition-colors sm:min-w-0 ${
                   isActive

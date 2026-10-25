@@ -67,6 +67,21 @@ const userSchema = new mongoose.Schema(
       },
     },
 
+    vibeCheck: {
+      enabled: {
+        type: Boolean,
+        default: false,
+      },
+      optedInAt: {
+        type: Date,
+        default: null,
+      },
+      interests: {
+        type: [{ type: String, trim: true, maxlength: 32 }],
+        default: [],
+      },
+    },
+
     isVerifiedStudent: {
       type: Boolean,
       default: false,
@@ -75,6 +90,27 @@ const userSchema = new mongoose.Schema(
     isRestricted: {
       type: Boolean,
       default: false,
+    },
+
+    restrictionReason: {
+      type: String,
+      trim: true,
+      maxlength: 300,
+      default: "",
+      select: false,
+    },
+
+    restrictedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+      select: false,
+    },
+
+    restrictedAt: {
+      type: Date,
+      default: null,
+      select: false,
     },
 
     isOnline: {

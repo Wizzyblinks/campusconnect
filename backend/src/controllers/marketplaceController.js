@@ -1,7 +1,46 @@
 import MarketplaceListing from "../models/MarketplaceListing.js";
-import cloudinary from "../config/cloudinary.js";
+import cloudinary, { isCloudinaryConfigured } from "../config/cloudinary.js";
 
-const uploadImage = (buffer) => {
+const listingCategories = [
+  "electronics",
+  "fashion",
+  "books",
+  "food",
+  "services",
+  "school_items",
+  "others",
+];
+const listingConditions = ["new", "used", "fair"];
+
+const normalizeImageUrls = (images) => {
+  const urls =
+    images === undefined || images === null || images === ""
+      ? []
+      : Array.isArray(images)
+        ? images
+        : [images];
+
+  if (
+    urls.some((image) => {
+      if (typeof image !== "string") {
+        return true;
+      }
+
+      try {
+        const url = new URL(image.trim());
+        return !["http:", "https:"].includes(url.protocol);
+      } catch {
+        return true;
+      }
+    })
+  ) {
+    return null;
+  }
+
+  return urls.map((image) => new URL(image.trim()).toString());
+};
+
+const uploadMedia = (file) => {
   return new Promise((resolve, reject) => {
     const stream = cloudinary.uploader.upload_stream(
       {
@@ -10,18 +49,51 @@ const uploadImage = (buffer) => {
       },
       (error, result) => {
         if (error) {
-          return reject(error);
+          reject(error);
+          return;
         }
 
-        resolve(result.secure_url);
+        if (!result?.secure_url || !result?.public_id) {
+          reject(new Error("Cloudinary did not return a stored media URL"));
+          return;
+        }
+
+        resolve({
+          secureUrl: result.secure_url,
+          publicId: result.public_id,
+          resourceType: "image",
+        });
       },
     );
 
-    stream.end(buffer);
+    stream.end(file.buffer);
+  });
+};
+
+const removeUploadedMedia = async (assets) => {
+  const results = await Promise.allSettled(
+    assets.map((asset) =>
+      Promise.resolve().then(() =>
+        cloudinary.uploader.destroy(asset.publicId, {
+          resource_type: asset.resourceType,
+        }),
+      ),
+    ),
+  );
+
+  results.forEach((result) => {
+    if (result.status === "rejected") {
+      console.error(
+        "Failed to remove temporary Cloudinary marketplace media:",
+        result.reason?.message || "Unknown Cloudinary error",
+      );
+    }
   });
 };
 
 export const createListing = async (req, res) => {
+  const uploadedAssets = [];
+
   try {
     const {
       title,
@@ -34,28 +106,85 @@ export const createListing = async (req, res) => {
       sellerTermsAccepted,
     } = req.body;
 
-    if (!title || !description || price === undefined || !category) {
+    const normalizedTitle = typeof title === "string" ? title.trim() : "";
+    const normalizedDescription =
+      typeof description === "string" ? description.trim() : "";
+    const parsedPrice = Number(price);
+    const parsedStock = stock === undefined ? 1 : Number(stock);
+    const normalizedImages = normalizeImageUrls(images);
+
+    if (
+      !normalizedTitle ||
+      normalizedTitle.length > 120 ||
+      !normalizedDescription ||
+      normalizedDescription.length > 1000 ||
+      price === undefined ||
+      price === null ||
+      price === "" ||
+      !["string", "number"].includes(typeof price) ||
+      !Number.isFinite(parsedPrice) ||
+      parsedPrice < 0 ||
+      !listingCategories.includes(category)
+    ) {
       return res.status(400).json({
-        message: "Title, description, price and category are required",
+        message:
+          "Provide a title (up to 120 characters), description (up to 1000 characters), valid non-negative price, and valid category",
       });
     }
 
-    if (!req.user.sellerTermsAcceptedAt && sellerTermsAccepted !== "true") {
+    if (
+      !Number.isInteger(parsedStock) ||
+      parsedStock < 1 ||
+      (condition !== undefined && !listingConditions.includes(condition))
+    ) {
+      return res.status(400).json({
+        message: "Provide a valid condition and a whole-number stock of at least 1",
+      });
+    }
+
+    if (normalizedImages === null) {
+      return res.status(400).json({
+        message: "Listing image URLs must be valid HTTP or HTTPS URLs",
+      });
+    }
+
+    if (
+      !req.user.sellerTermsAcceptedAt &&
+      sellerTermsAccepted !== "true" &&
+      sellerTermsAccepted !== true
+    ) {
       return res.status(400).json({
         message:
           "You must accept the seller terms before publishing your first listing",
       });
     }
 
-    const existingImages = Array.isArray(images)
-      ? images
-      : images
-        ? [images]
-        : [];
+    const files = req.files || [];
+    if (files.length > 0 && !isCloudinaryConfigured()) {
+      return res.status(503).json({
+        message:
+          "Marketplace image storage is not configured. Please contact support.",
+      });
+    }
 
-    const uploadedImages = await Promise.all(
-      (req.files || []).map((file) => uploadImage(file.buffer)),
-    );
+    if (files.some((file) => !Buffer.isBuffer(file.buffer))) {
+      return res.status(400).json({
+        message: "Marketplace media could not be read. Please re-upload it.",
+      });
+    }
+
+    try {
+      for (const file of files) {
+        uploadedAssets.push(await uploadMedia(file));
+      }
+    } catch (error) {
+      await removeUploadedMedia(uploadedAssets);
+      uploadedAssets.length = 0;
+      console.error("Marketplace media upload failed:", error.message);
+      return res.status(502).json({
+        message: "Marketplace media upload failed. Please try again.",
+      });
+    }
 
     if (!req.user.sellerTermsAcceptedAt) {
       req.user.sellerTermsAcceptedAt = new Date();
@@ -64,15 +193,18 @@ export const createListing = async (req, res) => {
 
     const listing = await MarketplaceListing.create({
       seller: req.user._id,
-      title,
-      description,
-      price,
+      title: normalizedTitle,
+      description: normalizedDescription,
+      price: parsedPrice,
       category,
-      images: [...existingImages, ...uploadedImages],
+      images: [
+        ...normalizedImages,
+        ...uploadedAssets.map((asset) => asset.secureUrl),
+      ],
       institution: req.user.institution,
       campus: req.user.campus,
       condition: condition || "new",
-      stock: stock === undefined ? 1 : stock,
+      stock: parsedStock,
     });
 
     return res.status(201).json({
@@ -80,11 +212,11 @@ export const createListing = async (req, res) => {
       listing,
     });
   } catch (error) {
+    await removeUploadedMedia(uploadedAssets);
     console.error("Create listing error:", error);
 
     return res.status(500).json({
       message: "Failed to create listing",
-      error: error.message,
     });
   }
 };
@@ -181,8 +313,19 @@ export const updateListing = async (req, res) => {
       "status",
     ];
 
+    if (req.body.images !== undefined) {
+      const normalizedImages = normalizeImageUrls(req.body.images);
+      if (normalizedImages === null) {
+        return res.status(400).json({
+          message: "Listing image URLs must be valid HTTP or HTTPS URLs",
+        });
+      }
+
+      listing.images = normalizedImages;
+    }
+
     allowedFields.forEach((field) => {
-      if (req.body[field] !== undefined) {
+      if (field !== "images" && req.body[field] !== undefined) {
         listing[field] = req.body[field];
       }
     });

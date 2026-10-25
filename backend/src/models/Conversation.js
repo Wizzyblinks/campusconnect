@@ -16,6 +16,11 @@ const conversationSchema = new mongoose.Schema(
       required: true,
     },
 
+    participantPair: {
+      type: String,
+      select: false,
+    },
+
     status: {
       type: String,
       enum: ["PENDING", "ACCEPTED", "DECLINED", "REPORTED"],
@@ -29,6 +34,38 @@ const conversationSchema = new mongoose.Schema(
     },
 
     lastMessageAt: {
+      type: Date,
+      default: null,
+    },
+
+    reportReason: {
+      type: String,
+      trim: true,
+      maxlength: 500,
+      default: "",
+    },
+    reportedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+    moderationStatus: {
+      type: String,
+      enum: ["OPEN", "REVIEWED", "RESOLVED", "DISMISSED"],
+      default: "OPEN",
+    },
+    moderationNote: {
+      type: String,
+      trim: true,
+      maxlength: 500,
+      default: "",
+    },
+    reviewedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+    reviewedAt: {
       type: Date,
       default: null,
     },
@@ -49,6 +86,10 @@ conversationSchema.index({
 conversationSchema.index({
   lastMessageAt: -1,
 });
+conversationSchema.index(
+  { participantPair: 1 },
+  { unique: true, sparse: true },
+);
 
 const Conversation = mongoose.model("Conversation", conversationSchema);
 

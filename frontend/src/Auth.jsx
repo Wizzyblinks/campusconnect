@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { GraduationCap, LogIn, UserPlus, School } from "lucide-react";
+import { LogIn, UserPlus, School } from "lucide-react";
 import { apiRequest } from "./services/api.js";
+import campusConnectLogo from "./assets/cclogo.jpeg";
 
 function Auth({ onLogin }) {
   const [mode, setMode] = useState("login");
@@ -133,9 +134,11 @@ function Auth({ onLogin }) {
     <div className="flex min-h-screen items-center justify-center bg-slate-100 px-4 py-10">
       <div className="w-full max-w-md rounded-3xl border border-slate-200 bg-white p-6 shadow-xl sm:p-8">
         <div className="mb-6 text-center">
-          <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-700 text-white">
-            <GraduationCap size={32} />
-          </div>
+          <img
+            src={campusConnectLogo}
+            alt="Campus Connect logo"
+            className="mx-auto mb-4 h-14 w-14 rounded-2xl bg-white object-contain"
+          />
 
           <h1 className="text-2xl font-extrabold text-blue-700">
             Campus<span className="text-slate-900">Connect</span>

@@ -34,6 +34,9 @@ import path from "path";
 
 import messageRoutes from "./routes/messageRoutes.js";
 import payoutRoutes from "./routes/payoutRoutes.js";
+import matchingRoutes from "./routes/matchingRoutes.js";
+import serviceRoutes from "./routes/serviceRoutes.js";
+import adminRoutes from "./routes/adminRoutes.js";
 
 const app = express();
 
@@ -72,6 +75,12 @@ app.use("/api/groups", groupRoutes);
 app.use("/api/messages", messageRoutes);
 
 app.use("/api/payouts", payoutRoutes);
+
+app.use("/api/matching", matchingRoutes);
+
+app.use("/api/services", serviceRoutes);
+
+app.use("/api/admin", adminRoutes);
 
 app.get("/", (req, res) => {
   res.json({
