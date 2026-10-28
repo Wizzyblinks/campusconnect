@@ -1,10 +1,19 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { io } from "socket.io-client";
-import { API_URL, apiRequest } from "./services/api.js";
+import {
+  API_URL,
+  apiRequest,
+  expireSession,
+  getTokenExpiration,
+  SESSION_EXPIRED_EVENT,
+} from "./services/api.js";
 import Auth from "./Auth.jsx";
 import { CampusServices } from "./CampusServices.jsx";
 import Messages from "./Messages.jsx";
 import AdminDashboard from "./AdminDashboard.jsx";
+import PostComposer from "./PostComposer.jsx";
+import GlobalSearch from "./GlobalSearch.jsx";
+import StudentSuggestions from "./StudentSuggestions.jsx";
 import campusConnectLogo from "./assets/cclogo.jpeg";
 import {
   Home,
@@ -44,56 +53,8 @@ const navigation = [
   { name: "Cafeteria", icon: Utensils },
   { name: "Campus Services", icon: Store },
   { name: "Campus Match", label: "VibeCheck", icon: Heart, highlight: true },
+  { name: "Discover Students", icon: GraduationCap },
   { name: "Admin Dashboard", icon: ShieldCheck, adminOnly: true },
-];
-
-const initialPosts = [
-  {
-    id: 1,
-    name: "Campus Connect",
-    initials: "CC",
-    university: "Campus Connect Team",
-    time: "2 hours ago",
-    text: "Welcome to Campus Connect! 🎉 Your new home for connecting with students, discovering opportunities, sharing resources, and staying updated on everything happening across Nigerian campuses.",
-    category: "Announcement",
-    likes: 124,
-    comments: 32,
-    color: "bg-blue-600",
-    verified: true,
-  },
-  {
-    id: 2,
-    name: "Daniel Johnson",
-    initials: "DJ",
-    university: "Ritman University",
-    time: "4 hours ago",
-    text: "Students, what programming language are you currently learning? 👨‍💻 I am focusing on JavaScript and React. Drop yours in the comments. Let us learn together!",
-    category: "Technology",
-    likes: 48,
-    comments: 17,
-    color: "bg-orange-500",
-    verified: false,
-  },
-  {
-    id: 3,
-    name: "Sarah Williams",
-    initials: "SW",
-    university: "University of Uyo",
-    time: "6 hours ago",
-    text: "Reminder to everyone preparing for exams: start early, take breaks, and help your classmates when you can. We all win when we learn together! 📚",
-    category: "Academics",
-    likes: 86,
-    comments: 21,
-    color: "bg-purple-600",
-    verified: false,
-  },
-];
-
-const trends = [
-  { tag: "#CampusLife", posts: "2.4k posts" },
-  { tag: "#TechStudentsNG", posts: "1.8k posts" },
-  { tag: "#ExamPreparation", posts: "960 posts" },
-  { tag: "#StudentOpportunities", posts: "740 posts" },
 ];
 
 function getSavedUser() {
@@ -122,22 +83,81 @@ const bottomNavigation = [
   { label: "Profile", page: "Profile", icon: UserRound },
 ];
 
+const normalizePost = (post, institutionLabel = "Campus Connect Student") => {
+  const author = post.author || {};
+  const name = author.name || "Student";
+  return {
+    id: post._id,
+    authorId: String(author._id || author),
+    name,
+    initials: name.split(" ").filter(Boolean).slice(0, 2).map((part) => part[0].toUpperCase()).join("") || "ST",
+    university: institutionLabel,
+    time: post.createdAt ? new Date(post.createdAt).toLocaleString() : "Just now",
+    text: post.text || "",
+    category: "General",
+    likes: post.likesCount || 0,
+    comments: post.commentsCount || 0,
+    shares: post.sharesCount || 0,
+    likedByMe: Boolean(post.likedByMe),
+    visibility: post.visibility || "campus",
+    color: "bg-blue-600",
+    verified: Boolean(author.isVerifiedStudent),
+    media: post.media,
+  };
+};
+
 function App() {
   const [user, setUser] = useState(getSavedUser);
   const [activePage, setActivePage] = useState("Home Feed");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [likedPosts, setLikedPosts] = useState([]);
-  const [posts, setPosts] = useState(initialPosts);
-  const [newPost, setNewPost] = useState("");
-  const [search, setSearch] = useState("");
+  const [posts, setPosts] = useState([]);
+  const [postsLoading, setPostsLoading] = useState(false);
+  const [postsError, setPostsError] = useState("");
+  const [postsReload, setPostsReload] = useState(0);
+  const [postComposerOpen, setPostComposerOpen] = useState(false);
+  const [postNotice, setPostNotice] = useState("");
+  const [profileSaving, setProfileSaving] = useState(false);
+  const [profileNotice, setProfileNotice] = useState("");
+  const [profileError, setProfileError] = useState("");
+  const [passwordForm, setPasswordForm] = useState({ currentPassword: "", newPassword: "" });
+  const [passwordSaving, setPasswordSaving] = useState(false);
+  const [selectedSearchResult, setSelectedSearchResult] = useState(null);
+  const [trending, setTrending] = useState({ posts: [], hashtags: [] });
+  const [trendingError, setTrendingError] = useState("");
+  const [trendingLoading, setTrendingLoading] = useState(false);
+  const [feedPage, setFeedPage] = useState(1);
+  const [feedHasMore, setFeedHasMore] = useState(false);
+  const [feedLoadingMore, setFeedLoadingMore] = useState(false);
+  const [postActionError, setPostActionError] = useState("");
+  const [postActionNotice, setPostActionNotice] = useState("");
+  const [pendingPostLikes, setPendingPostLikes] = useState(() => new Set());
+  const [editingPost, setEditingPost] = useState(null);
+  const [postEditSaving, setPostEditSaving] = useState(false);
+  const [commentsForPost, setCommentsForPost] = useState("");
+  const [postComments, setPostComments] = useState([]);
+  const [commentReplies, setCommentReplies] = useState({});
+  const [commentReplyTo, setCommentReplyTo] = useState(null);
+  const [editingComment, setEditingComment] = useState(null);
+  const [commentsLoading, setCommentsLoading] = useState(false);
+  const [commentDraft, setCommentDraft] = useState("");
+  const [commentSaving, setCommentSaving] = useState(false);
+  const [commentEditSaving, setCommentEditSaving] = useState(false);
+  const [activeTrendTag, setActiveTrendTag] = useState("");
   const [unreadMessages, setUnreadMessages] = useState(0);
   const [messageSocket, setMessageSocket] = useState(null);
+  const [notificationConversationId, setNotificationConversationId] = useState("");
   const [campusNews, setCampusNews] = useState([]);
   const [newsLoading, setNewsLoading] = useState(false);
   const [newsError, setNewsError] = useState("");
 
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const [notifications, setNotifications] = useState([]);
+  const [notificationsLoading, setNotificationsLoading] = useState(false);
+  const [notificationsError, setNotificationsError] = useState("");
+  const [unreadNotifications, setUnreadNotifications] = useState(0);
+  const [notificationsReload, setNotificationsReload] = useState(0);
+  const notificationIds = useRef(new Set());
 
   useEffect(() => {
     const token = localStorage.getItem("token");
@@ -156,29 +176,183 @@ function App() {
     };
   }, [user]);
 
-  const [notifications, setNotifications] = useState([
-    {
-      id: 1,
-      title: "Welcome to Campus Connect!",
-      message: "Explore your campus and connect with other students.",
-      time: "Just now",
-      read: false,
-    },
-    {
-      id: 2,
-      title: "Discover VibeCheck",
-      message: "Find students who share your interests.",
-      time: "Today",
-      read: false,
-    },
-    {
-      id: 3,
-      title: "Explore your community",
-      message: "Join conversations happening across campuses.",
-      time: "Today",
-      read: true,
-    },
-  ]);
+  useEffect(() => {
+    if (!user) return undefined;
+    const token = localStorage.getItem("token");
+    const handleSessionExpired = () => {
+      setUser(null);
+      setActivePage("Home Feed");
+      setMobileMenuOpen(false);
+      setNotificationsOpen(false);
+      setProfileMenuOpen(false);
+      setCampusNews([]);
+      setPosts([]);
+      setSelectedSearchResult(null);
+      setNotifications([]);
+      setUnreadNotifications(0);
+      setNotificationsError("");
+      setUnreadMessages(0);
+      setNotificationConversationId("");
+    };
+
+    window.addEventListener(SESSION_EXPIRED_EVENT, handleSessionExpired);
+    if (!token) {
+      handleSessionExpired();
+      return () => window.removeEventListener(SESSION_EXPIRED_EVENT, handleSessionExpired);
+    }
+
+    const checkExpiration = () => {
+      const expiresAt = getTokenExpiration(token);
+      if (!expiresAt || expiresAt <= Date.now()) expireSession(token);
+    };
+    const expiresAt = getTokenExpiration(token);
+    const timer = expiresAt
+      ? setTimeout(() => expireSession(token), Math.max(0, expiresAt - Date.now()))
+      : null;
+    window.addEventListener("focus", checkExpiration);
+    document.addEventListener("visibilitychange", checkExpiration);
+    checkExpiration();
+
+    return () => {
+      if (timer !== null) clearTimeout(timer);
+      window.removeEventListener("focus", checkExpiration);
+      document.removeEventListener("visibilitychange", checkExpiration);
+      window.removeEventListener(SESSION_EXPIRED_EVENT, handleSessionExpired);
+    };
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) {
+      setNotifications([]);
+      setNotificationsLoading(false);
+      setUnreadNotifications(0);
+      setNotificationsError("");
+      notificationIds.current = new Set();
+      return undefined;
+    }
+
+    let cancelled = false;
+    setNotificationsLoading(true);
+    setNotificationsError("");
+    apiRequest("/api/notifications")
+      .then((data) => {
+        if (cancelled) return;
+        const loaded = Array.isArray(data.notifications) ? data.notifications : [];
+        setNotifications(loaded);
+        notificationIds.current = new Set(loaded.map((item) => String(item._id)));
+        setUnreadNotifications(Number(data.unreadCount) || 0);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setNotificationsError(error.message || "We couldn't load your notifications.");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setNotificationsLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user, notificationsReload]);
+
+  useEffect(() => {
+    if (!messageSocket) return undefined;
+    const handleNotification = ({ notification } = {}) => {
+      if (!notification?._id) return;
+      const notificationId = String(notification._id);
+      if (!notificationIds.current.has(notificationId)) {
+        notificationIds.current.add(notificationId);
+        if (!notification.readAt) {
+          setUnreadNotifications((count) => count + 1);
+        }
+      }
+      setNotifications((current) => [
+        notification,
+        ...current.filter((item) => String(item._id) !== notificationId),
+      ].slice(0, 50));
+    };
+    const handleNotificationRead = ({ all, notificationId, unreadCount } = {}) => {
+      setNotifications((current) => current.map((item) => {
+        if (all || String(item._id) === String(notificationId)) {
+          return { ...item, readAt: item.readAt || new Date().toISOString() };
+        }
+        return item;
+      }));
+      if (Number.isFinite(unreadCount)) setUnreadNotifications(unreadCount);
+    };
+    messageSocket.on("notification:new", handleNotification);
+    messageSocket.on("notification:read", handleNotificationRead);
+    return () => {
+      messageSocket.off("notification:new", handleNotification);
+      messageSocket.off("notification:read", handleNotificationRead);
+    };
+  }, [messageSocket]);
+
+  useEffect(() => {
+    if (!user || !localStorage.getItem("token")) return undefined;
+    let cancelled = false;
+    setPostsLoading(true);
+    setPostsError("");
+    apiRequest("/api/posts")
+      .then((data) => {
+        if (!cancelled) {
+          const label =
+            (typeof user?.institution === "object" && user.institution !== null
+              ? user.institution.name || user.institution.shortName
+              : user?.institutionName) || "Campus Connect Student";
+          setPosts((Array.isArray(data.posts) ? data.posts : []).map((post) => normalizePost(post, label)));
+          setFeedPage(data.page || 1);
+          setFeedHasMore(Boolean(data.hasMore));
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) setPostsError(error.message || "We couldn't load posts. Please try again.");
+      })
+      .finally(() => {
+        if (!cancelled) setPostsLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [user, postsReload]);
+
+  useEffect(() => {
+    if (!user || activePage !== "Home Feed") return undefined;
+    let cancelled = false;
+    setTrendingLoading(true);
+    setTrendingError("");
+    apiRequest("/api/search/trending")
+      .then((data) => {
+        if (!cancelled) setTrending({ posts: data.posts || [], hashtags: data.hashtags || [] });
+      })
+      .catch((error) => {
+        if (!cancelled) setTrendingError(error.message || "We couldn't load current trends.");
+      })
+      .finally(() => {
+        if (!cancelled) setTrendingLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [activePage, user, postsReload]);
+
+  useEffect(() => {
+    if (!user) return;
+    const sharedPostId = new URLSearchParams(window.location.search).get("post");
+    if (!sharedPostId) return;
+    let cancelled = false;
+    apiRequest(`/api/posts/${encodeURIComponent(sharedPostId)}`)
+      .then((data) => {
+        if (cancelled) return;
+        const post = normalizePost(data.post);
+        setPosts((current) => current.some((item) => item.id === post.id)
+          ? current.map((item) => item.id === post.id ? post : item)
+          : [post, ...current]);
+        setActivePage("Home Feed");
+        setSelectedSearchResult({ type: "posts", item: post });
+      })
+      .catch((error) => {
+        if (!cancelled) setPostActionError(error.message || "This post isn't available.");
+      });
+    return () => { cancelled = true; };
+  }, [user]);
 
   const [matchProfiles, setMatchProfiles] = useState([]);
   const [matchConnections, setMatchConnections] = useState([]);
@@ -209,7 +383,14 @@ function App() {
   const [listingFormOpen, setListingFormOpen] = useState(false);
   const [checkoutListing, setCheckoutListing] = useState(null);
   const [ordersOpen, setOrdersOpen] = useState(false);
+  const [dashboardView, setDashboardView] = useState("buyer");
   const [orders, setOrders] = useState([]);
+  const [ordersError, setOrdersError] = useState("");
+  const [sellerListings, setSellerListings] = useState([]);
+  const [sellerListingsLoading, setSellerListingsLoading] = useState(false);
+  const [sellerListingsError, setSellerListingsError] = useState("");
+  const [editingListingId, setEditingListingId] = useState("");
+  const [listingActionId, setListingActionId] = useState("");
   const [ordersLoading, setOrdersLoading] = useState(false);
   const [payoutSetupOpen, setPayoutSetupOpen] = useState(false);
   const [banks, setBanks] = useState([]);
@@ -224,6 +405,7 @@ function App() {
     condition: "new",
     stock: "1",
     media: [],
+    existingImages: [],
     sellerTermsAccepted: false,
   });
   const [orderForm, setOrderForm] = useState({
@@ -252,14 +434,46 @@ function App() {
 
   async function loadOrders() {
     setOrdersLoading(true);
+    setOrdersError("");
     try {
       const data = await apiRequest("/api/orders");
       setOrders(Array.isArray(data.orders) ? data.orders : []);
     } catch (error) {
-      setMarketplaceError(error.message || "Could not load your orders.");
+      setOrders([]);
+      setOrdersError(error.message || "We couldn't load your orders.");
     } finally {
       setOrdersLoading(false);
     }
+  }
+
+  async function loadSellerListings() {
+    setSellerListingsLoading(true);
+    setSellerListingsError("");
+    try {
+      const data = await apiRequest("/api/marketplace/mine");
+      setSellerListings(Array.isArray(data.listings) ? data.listings : []);
+    } catch (error) {
+      setSellerListings([]);
+      setSellerListingsError(error.message || "We couldn't load your listings.");
+    } finally {
+      setSellerListingsLoading(false);
+    }
+  }
+
+  function resetListingForm() {
+    setListingForm({
+      title: "",
+      description: "",
+      price: "",
+      category: "electronics",
+      condition: "new",
+      stock: "1",
+      media: [],
+      existingImages: [],
+      sellerTermsAccepted: false,
+    });
+    setEditingListingId("");
+    setListingFormOpen(false);
   }
 
   async function verifyDeliveryOtp(orderId) {
@@ -446,6 +660,8 @@ function App() {
     }
 
     loadMarketplaceListings();
+    loadOrders();
+    loadSellerListings();
   }, [activePage, user]);
 
   async function submitListing(event) {
@@ -461,32 +677,105 @@ function App() {
       formData.append("category", listingForm.category);
       formData.append("condition", listingForm.condition);
       formData.append("stock", listingForm.stock);
-      formData.append("sellerTermsAccepted", String(listingForm.sellerTermsAccepted));
+      if (editingListingId) {
+        formData.append("images", JSON.stringify(listingForm.existingImages));
+      } else {
+        formData.append("sellerTermsAccepted", String(listingForm.sellerTermsAccepted));
+      }
       listingForm.media.forEach((file) => formData.append("media", file));
 
-      const data = await apiRequest("/api/marketplace", {
-        method: "POST",
+      const data = await apiRequest(
+        editingListingId ? `/api/marketplace/${editingListingId}` : "/api/marketplace",
+        {
+        method: editingListingId ? "PATCH" : "POST",
         body: formData,
       });
 
-      setMarketplaceListings((current) => [data.listing, ...current]);
-      setListingFormOpen(false);
-      setListingForm({
-        title: "",
-        description: "",
-        price: "",
-        category: "electronics",
-        condition: "new",
-        stock: "1",
-        media: [],
-        sellerTermsAccepted: false,
+      setMarketplaceListings((current) => {
+        const next = current.filter((listing) => listing._id !== data.listing._id);
+        return data.listing.status === "active" && data.listing.stock > 0
+          ? [data.listing, ...next]
+          : next;
       });
-      setMarketplaceNotice("Your item is now listed in the marketplace.");
+      setSellerListings((current) => [
+        data.listing,
+        ...current.filter((listing) => listing._id !== data.listing._id),
+      ]);
+      resetListingForm();
+      setMarketplaceNotice(editingListingId
+        ? "Your listing has been updated."
+        : "Your item is now listed in the marketplace.");
     } catch (error) {
       setMarketplaceError(error.message || "Could not create your listing.");
     } finally {
       setMarketplaceSubmitting(false);
     }
+  }
+
+  async function changeListingStatus(listing) {
+    const restoring = listing.status === "hidden";
+    if (!restoring && !window.confirm("Take this listing down from the public marketplace? Existing orders and payment records will remain unchanged.")) {
+      return;
+    }
+    setListingActionId(listing._id);
+    setMarketplaceError("");
+    try {
+      const data = await apiRequest(`/api/marketplace/${listing._id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ status: restoring ? "active" : "hidden" }),
+      });
+      setSellerListings((current) => current.map((item) =>
+        item._id === listing._id ? data.listing : item,
+      ));
+      setMarketplaceListings((current) => {
+        const next = current.filter((item) => item._id !== listing._id);
+        return data.listing.status === "active" && data.listing.stock > 0
+          ? [data.listing, ...next]
+          : next;
+      });
+      setMarketplaceNotice(restoring ? "Your listing is back in the marketplace." : "Your listing has been taken down.");
+    } catch (error) {
+      setMarketplaceError(error.message || "We couldn't update this listing.");
+    } finally {
+      setListingActionId("");
+    }
+  }
+
+  function editListing(listing) {
+    setOrdersOpen(false);
+    setEditingListingId(listing._id);
+    setListingForm({
+      title: listing.title || "",
+      description: listing.description || "",
+      price: String(listing.price ?? ""),
+      category: listing.category || "others",
+      condition: listing.condition || "new",
+      stock: String(listing.stock ?? 0),
+      media: [],
+      existingImages: Array.isArray(listing.images) ? listing.images : [],
+      sellerTermsAccepted: true,
+    });
+    setMarketplaceError("");
+    setListingFormOpen(true);
+  }
+
+  function selectListingMedia(event) {
+    const files = Array.from(event.target.files || []);
+    event.target.value = "";
+    if (files.length + listingForm.existingImages.length > 4) {
+      setMarketplaceError("A listing can have no more than four photos.");
+      return;
+    }
+    if (files.some((file) => !["image/jpeg", "image/png", "image/gif", "image/webp"].includes(file.type))) {
+      setMarketplaceError("Choose JPG, PNG, GIF, or WebP image files.");
+      return;
+    }
+    if (files.some((file) => file.size > 25 * 1024 * 1024)) {
+      setMarketplaceError("Each listing photo must be 25 MB or smaller.");
+      return;
+    }
+    setMarketplaceError("");
+    setListingForm((current) => ({ ...current, media: files }));
   }
 
   async function startCheckout(event) {
@@ -535,6 +824,7 @@ function App() {
   }
 
   function handleLogout() {
+    apiRequest("/api/auth/logout", { method: "POST" }).catch(() => undefined);
     localStorage.removeItem("token");
     localStorage.removeItem("user");
 
@@ -542,54 +832,312 @@ function App() {
     setActivePage("Home Feed");
     setCampusNews([]);
     setNewsError("");
-    setLikedPosts([]);
     setMobileMenuOpen(false);
     setNotificationsOpen(false);
     setProfileMenuOpen(false);
+    setPosts([]);
+    setSelectedSearchResult(null);
+    setNotifications([]);
+    setUnreadNotifications(0);
+    setUnreadMessages(0);
+    setNotificationConversationId("");
   }
 
-  function toggleLike(id) {
-    setLikedPosts((previous) =>
-      previous.includes(id)
-        ? previous.filter((postId) => postId !== id)
-        : [...previous, id],
-    );
-  }
-
-  function publishPost(event) {
+  async function saveProfileSettings(event) {
     event.preventDefault();
+    setProfileSaving(true);
+    setProfileError("");
+    setProfileNotice("");
+    const formData = new FormData(event.currentTarget);
+    const body = Object.fromEntries(formData.entries());
+    delete body.discoverable;
+    delete body.profileVisibility;
+    delete body.defaultPostVisibility;
+    body.privacy = {
+      discoverable: formData.get("discoverable") === "on",
+      profileVisibility: formData.get("profileVisibility"),
+      defaultPostVisibility: formData.get("defaultPostVisibility"),
+    };
+    try {
+      const data = await apiRequest("/api/profile", {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      });
+      const updatedUser = { ...user, ...data.user };
+      setUser(updatedUser);
+      localStorage.setItem("user", JSON.stringify(updatedUser));
+      setProfileNotice("Your profile settings have been saved.");
+    } catch (error) {
+      setProfileError(error.message || "We couldn't save your profile settings.");
+    } finally {
+      setProfileSaving(false);
+    }
+  }
 
-    if (!newPost.trim()) {
+  async function changeAccountPassword(event) {
+    event.preventDefault();
+    setPasswordSaving(true);
+    setProfileError("");
+    setProfileNotice("");
+    try {
+      const data = await apiRequest("/api/profile/password", {
+        method: "PATCH",
+        body: JSON.stringify(passwordForm),
+      });
+      setPasswordForm({ currentPassword: "", newPassword: "" });
+      setProfileNotice(data.message || "Password updated. Please log in again.");
+      window.setTimeout(handleLogout, 1500);
+    } catch (error) {
+      setProfileError(error.message || "We couldn't update your password.");
+    } finally {
+      setPasswordSaving(false);
+    }
+  }
+
+  function addPublishedPost(post) {
+    setPosts((previous) => [normalizePost(post, institutionName || campusName), ...previous]);
+    setPostComposerOpen(false);
+    setPostNotice("Your post has been published successfully.");
+  }
+
+  async function togglePostLike(post) {
+    if (pendingPostLikes.has(post.id)) return;
+    const likedByMe = !post.likedByMe;
+    setPendingPostLikes((current) => new Set(current).add(post.id));
+    setPostActionError("");
+    setPosts((current) => current.map((item) => item.id === post.id
+      ? { ...item, likedByMe, likes: Math.max(0, item.likes + (likedByMe ? 1 : -1)) }
+      : item));
+    try {
+      const result = await apiRequest(`/api/posts/${post.id}/like`, {
+        method: likedByMe ? "POST" : "DELETE",
+      });
+      setPosts((current) => current.map((item) => item.id === post.id
+        ? { ...item, likedByMe: result.liked, likes: result.likesCount }
+        : item));
+    } catch (error) {
+      setPosts((current) => current.map((item) => item.id === post.id
+        ? { ...item, likedByMe: post.likedByMe, likes: post.likes }
+        : item));
+      setPostActionError(error.message || "We couldn't update your like.");
+    } finally {
+      setPendingPostLikes((current) => {
+        const next = new Set(current);
+        next.delete(post.id);
+        return next;
+      });
+    }
+  }
+
+  async function openPostComments(postId) {
+    if (commentsForPost === postId) {
+      setCommentsForPost("");
       return;
     }
+    setCommentsForPost(postId);
+    setCommentsLoading(true);
+    setPostActionError("");
+    setCommentReplies({});
+    setCommentReplyTo(null);
+    setEditingComment(null);
+    try {
+      const data = await apiRequest(`/api/posts/${postId}/comments`);
+      setPostComments(data.comments || []);
+    } catch (error) {
+      setPostActionError(error.message || "We couldn't load comments.");
+      setPostComments([]);
+    } finally {
+      setCommentsLoading(false);
+    }
+  }
 
-    const fullName = user?.name || "Student";
+  async function submitPostComment(event, postId) {
+    event.preventDefault();
+    const text = commentDraft.trim();
+    if (!text || commentSaving) return;
+    setCommentSaving(true);
+    setPostActionError("");
+    try {
+      const data = await apiRequest(`/api/posts/${postId}/comments`, {
+        method: "POST",
+        body: JSON.stringify({ text, ...(commentReplyTo ? { parent: commentReplyTo._id } : {}) }),
+      });
+      if (commentReplyTo) {
+        setCommentReplies((current) => ({
+          ...current,
+          [commentReplyTo._id]: [...(current[commentReplyTo._id] || []), data.comment],
+        }));
+      } else {
+        setPostComments((current) => [...current, data.comment]);
+      }
+      setPosts((current) => current.map((post) => post.id === postId
+        ? { ...post, comments: data.commentsCount }
+        : post));
+      setCommentDraft("");
+      setCommentReplyTo(null);
+    } catch (error) {
+      setPostActionError(error.message || "We couldn't add your comment.");
+    } finally {
+      setCommentSaving(false);
+    }
+  }
 
-    const initials =
-      fullName
-        .split(" ")
-        .filter(Boolean)
-        .slice(0, 2)
-        .map((part) => part[0].toUpperCase())
-        .join("") || "ST";
+  async function loadCommentReplies(postId, commentId) {
+    try {
+      const data = await apiRequest(`/api/posts/${postId}/comments?parent=${commentId}`);
+      setCommentReplies((current) => ({ ...current, [commentId]: data.comments || [] }));
+    } catch (error) {
+      setPostActionError(error.message || "We couldn't load replies.");
+    }
+  }
 
-    const post = {
-      id: Date.now(),
-      name: fullName,
-      initials,
-      university: institutionName || campusName || "Campus Connect Student",
-      time: "Just now",
-      text: newPost.trim(),
-      category: "General",
-      likes: 0,
-      comments: 0,
-      color: "bg-blue-600",
-      verified: Boolean(user?.isVerifiedStudent),
-    };
+  async function saveCommentEdit(event, comment) {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    const text = String(formData.get("text") || "").trim();
+    if (!text || commentEditSaving) return;
+    setCommentEditSaving(true);
+    setPostActionError("");
+    try {
+      const data = await apiRequest(`/api/posts/comments/${comment._id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ text }),
+      });
+      const replaceComment = (items) => items.map((item) => item._id === comment._id ? data.comment : item);
+      setPostComments(replaceComment);
+      setCommentReplies((current) => Object.fromEntries(
+        Object.entries(current).map(([id, items]) => [id, replaceComment(items)]),
+      ));
+      setEditingComment(null);
+    } catch (error) {
+      setPostActionError(error.message || "We couldn't update your comment.");
+    } finally {
+      setCommentEditSaving(false);
+    }
+  }
 
-    setPosts((previous) => [post, ...previous]);
-    setNewPost("");
-    setActivePage("Home Feed");
+  async function removeComment(comment) {
+    if (!window.confirm("Delete this comment?")) return;
+    setPostActionError("");
+    try {
+      await apiRequest(`/api/posts/comments/${comment._id}`, { method: "DELETE" });
+      const markDeleted = (items) => items.map((item) =>
+        item._id === comment._id ? { ...item, isDeleted: true, text: "" } : item,
+      );
+      setPostComments(markDeleted);
+      setCommentReplies((current) => Object.fromEntries(
+        Object.entries(current).map(([id, items]) => [id, markDeleted(items)]),
+      ));
+      setPosts((current) => current.map((post) => post.id === commentsForPost
+        ? { ...post, comments: Math.max(0, post.comments - 1) }
+        : post));
+    } catch (error) {
+      setPostActionError(error.message || "We couldn't delete your comment.");
+    }
+  }
+
+  async function sharePost(post) {
+    const url = new URL(window.location.href);
+    url.searchParams.set("post", post.id);
+    const shareData = { title: `Post by ${post.name}`, text: post.text, url: url.toString() };
+    try {
+      if (navigator.share) await navigator.share(shareData);
+      else await navigator.clipboard.writeText(url.toString());
+      const data = await apiRequest(`/api/posts/${post.id}/share`, { method: "POST" });
+      setPosts((current) => current.map((item) => item.id === post.id
+        ? { ...item, shares: data.sharesCount }
+        : item));
+      setPostActionNotice(navigator.share ? "Post shared." : "A link to the post was copied.");
+    } catch (error) {
+      if (error.name === "AbortError") return;
+      setPostActionError(error.message || "We couldn't share this post.");
+    }
+  }
+
+  async function savePostEdit(event) {
+    event.preventDefault();
+    if (!editingPost) return;
+    const formData = new FormData(event.currentTarget);
+    setPostEditSaving(true);
+    setPostActionError("");
+    try {
+      const result = await apiRequest(`/api/posts/${editingPost.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          text: formData.get("text"),
+          visibility: formData.get("visibility"),
+        }),
+      });
+      const updated = normalizePost(result.post, institutionName || campusName);
+      setPosts((current) => current.map((post) => post.id === updated.id ? { ...post, ...updated } : post));
+      setEditingPost(null);
+      setPostActionNotice("Your post has been updated.");
+    } catch (error) {
+      setPostActionError(error.message || "We couldn't update your post.");
+    } finally {
+      setPostEditSaving(false);
+    }
+  }
+
+  async function removePost(postId) {
+    if (!window.confirm("Delete this post? This cannot be undone.")) return;
+    try {
+      await apiRequest(`/api/posts/${postId}`, { method: "DELETE" });
+      setPosts((current) => current.filter((post) => post.id !== postId));
+      setPostActionNotice("Your post has been deleted.");
+    } catch (error) {
+      setPostActionError(error.message || "We couldn't delete your post.");
+    }
+  }
+
+  async function reportPost(postId) {
+    const reason = window.prompt("Choose a reason: spam, harassment, misinformation, inappropriate, or other", "other");
+    if (reason === null) return;
+    if (!["spam", "harassment", "misinformation", "inappropriate", "other"].includes(reason.trim().toLowerCase())) {
+      setPostActionError("Choose spam, harassment, misinformation, inappropriate, or other as the reason.");
+      return;
+    }
+    const details = window.prompt("Add details for campus moderators (optional, up to 500 characters):");
+    if (details === null) return;
+    try {
+      const data = await apiRequest(`/api/posts/${postId}/report`, {
+        method: "POST",
+        body: JSON.stringify({ reason: reason.trim().toLowerCase(), details }),
+      });
+      setPostActionNotice(data.message || "Your report has been sent to campus moderators.");
+      setPostActionError("");
+    } catch (error) {
+      setPostActionError(error.message || "We couldn't send your report.");
+    }
+  }
+
+  async function selectSearchResult(type, item) {
+    setPostActionError("");
+    try {
+      if (type === "students") {
+        const data = await apiRequest(`/api/discovery/profiles/${item._id || item.id}`);
+        setSelectedSearchResult({ type, item: data.profile });
+      } else if (type === "posts") {
+        const data = await apiRequest(`/api/posts/${item._id || item.id}`);
+        const post = normalizePost(data.post, institutionName || campusName);
+        setPosts((current) => current.some((existing) => existing.id === post.id)
+          ? current.map((existing) => existing.id === post.id ? post : existing)
+          : [post, ...current]);
+        setSelectedSearchResult({ type, item: post });
+        setActivePage("Home Feed");
+      } else if (type === "marketplace") {
+        setActivePage("Marketplace");
+        setSelectedSearchResult({ type, item });
+      } else if (type === "news") {
+        setActivePage("Campus News");
+        setSelectedSearchResult({ type, item });
+      } else {
+        setActivePage("Communities");
+        setSelectedSearchResult({ type, item });
+      }
+    } catch (error) {
+      setPostActionError(error.message || "We couldn't open that result.");
+    }
   }
 
   async function saveVibeCheckPreferences(enabled) {
@@ -698,18 +1246,69 @@ function App() {
     setMatchRefreshVersion((current) => current + 1);
   }
 
-  function markNotificationsRead() {
-    setNotifications((previous) =>
-      previous.map((notification) => ({
-        ...notification,
-        read: true,
-      })),
-    );
+  async function markNotificationsRead() {
+    setNotificationsError("");
+    try {
+      const data = await apiRequest("/api/notifications/read", {
+        method: "PATCH",
+      });
+      setNotifications((previous) =>
+        previous.map((notification) => ({
+          ...notification,
+          readAt: notification.readAt || new Date().toISOString(),
+        })),
+      );
+      setUnreadNotifications(Number(data.unreadCount) || 0);
+    } catch (error) {
+      setNotificationsError(error.message || "We couldn't update your notifications.");
+    }
   }
 
-  const unreadNotifications = notifications.filter(
-    (notification) => !notification.read,
-  ).length;
+  async function openNotification(notification) {
+    setNotificationsError("");
+    if (!notification.readAt) {
+      try {
+        const data = await apiRequest(
+          `/api/notifications/${encodeURIComponent(notification._id)}/read`,
+          { method: "PATCH" },
+        );
+        setNotifications((previous) =>
+          previous.map((item) =>
+            item._id === notification._id
+              ? { ...item, readAt: data.notification?.readAt || new Date().toISOString() }
+              : item,
+          ),
+        );
+        setUnreadNotifications(Number(data.unreadCount) || 0);
+      } catch (error) {
+        setNotificationsError(error.message || "We couldn't update your notification.");
+        return;
+      }
+    }
+
+    setNotificationsOpen(false);
+    setMobileMenuOpen(false);
+    if (notification.targetType === "conversation") {
+      setNotificationConversationId(String(notification.targetId));
+      setActivePage("Messages");
+      return;
+    }
+    if (notification.targetType === "post") {
+      setActivePage("Home Feed");
+      try {
+        const data = await apiRequest(
+          `/api/posts/${encodeURIComponent(notification.targetId)}`,
+        );
+        const post = normalizePost(data.post);
+        setPosts((current) => current.some((item) => item.id === post.id)
+          ? current.map((item) => item.id === post.id ? post : item)
+          : [post, ...current]);
+        setSelectedSearchResult({ type: "posts", item: post });
+      } catch (error) {
+        setPostActionError(error.message || "This post isn't available.");
+      }
+    }
+  }
 
   const institutionName =
     typeof user?.institution === "object" && user.institution !== null
@@ -721,15 +1320,9 @@ function App() {
       ? user.campus.name || ""
       : user?.campusName || "";
 
-  const filteredPosts = posts.filter((post) => {
-    const query = search.toLowerCase();
-
-    return (
-      post.text.toLowerCase().includes(query) ||
-      post.name.toLowerCase().includes(query) ||
-      post.university.toLowerCase().includes(query)
-    );
-  });
+  const filteredPosts = activeTrendTag
+    ? posts.filter((post) => post.text.toLowerCase().includes(activeTrendTag.toLowerCase()))
+    : posts;
 
   const filteredMarketplaceListings = marketplaceListings.filter((listing) => {
     const query = marketplaceSearch.trim().toLowerCase();
@@ -746,6 +1339,31 @@ function App() {
     return matchesSearch && matchesCategory;
   });
 
+  const accountId = String(user?._id || user?.id || "");
+  const buyerOrders = orders.filter(
+    (order) => String(order.buyer?._id || order.buyer) === accountId,
+  );
+  const sellerOrders = orders.filter(
+    (order) => String(order.seller?._id || order.seller) === accountId,
+  );
+  const dashboardOrders = dashboardView === "seller" ? sellerOrders : buyerOrders;
+  const buyerOrderStats = [
+    ["Total orders", buyerOrders.length],
+    ["Pending payment", buyerOrders.filter((order) => order.paymentStatus === "PENDING").length],
+    ["Awaiting processing", buyerOrders.filter((order) => order.status === "PAID").length],
+    ["In progress", buyerOrders.filter((order) => ["PROCESSING", "READY_FOR_DELIVERY", "OUT_FOR_DELIVERY", "DELIVERED"].includes(order.status)).length],
+    ["Completed", buyerOrders.filter((order) => order.status === "COMPLETED").length],
+    ["Cancelled / disputed", buyerOrders.filter((order) => ["CANCELLED", "DISPUTED", "REFUNDED"].includes(order.status)).length],
+  ];
+  const sellerOrderStats = [
+    ["Active listings", sellerListings.filter((listing) => listing.status === "active" && listing.stock > 0).length],
+    ["Unavailable", sellerListings.filter((listing) => listing.status === "sold" || (listing.status === "active" && listing.stock <= 0)).length],
+    ["Taken down", sellerListings.filter((listing) => listing.status === "hidden").length],
+    ["Total orders", sellerOrders.length],
+    ["Awaiting action", sellerOrders.filter((order) => ["PAID", "PROCESSING", "READY_FOR_DELIVERY", "OUT_FOR_DELIVERY"].includes(order.status)).length],
+    ["Completed sales", sellerOrders.filter((order) => order.status === "COMPLETED").length],
+  ];
+
   if (!user) {
     return <Auth onLogin={handleLogin} />;
   }
@@ -759,6 +1377,30 @@ function App() {
       .slice(0, 2)
       .map((part) => part[0].toUpperCase())
       .join("") || "ST";
+
+  function renderComment(comment) {
+    const isOwner = String(comment.author?._id || comment.author) === String(user._id || user.id);
+    return (
+      <>
+        <p className="text-xs font-bold text-slate-700">{comment.author?.name || "Student"}</p>
+        {editingComment?._id === comment._id ? (
+          <form onSubmit={(event) => saveCommentEdit(event, comment)} className="mt-2 flex gap-2">
+            <input name="text" defaultValue={comment.text} maxLength={2000} autoFocus className="min-w-0 flex-1 rounded-lg border border-slate-200 px-2 py-1.5 text-sm" />
+            <button type="submit" disabled={commentEditSaving} className="text-xs font-bold text-blue-700 disabled:opacity-50">{commentEditSaving ? "Saving..." : "Save"}</button>
+            <button type="button" onClick={() => setEditingComment(null)} className="text-xs text-slate-500">Cancel</button>
+          </form>
+        ) : (
+          <p className="mt-1 whitespace-pre-wrap text-sm text-slate-700">{comment.isDeleted ? "Comment deleted" : comment.text}</p>
+        )}
+        {isOwner && !comment.isDeleted && editingComment?._id !== comment._id && (
+          <div className="mt-2 flex gap-3">
+            <button type="button" onClick={() => setEditingComment(comment)} className="text-xs font-semibold text-slate-500">Edit</button>
+            <button type="button" onClick={() => removeComment(comment)} className="text-xs font-semibold text-red-600">Delete</button>
+          </div>
+        )}
+      </>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
@@ -795,16 +1437,7 @@ function App() {
           </div>
 
           <div className="hidden max-w-md flex-1 md:block">
-            <div className="flex items-center gap-3 rounded-xl bg-slate-100 px-4 py-2.5 focus-within:ring-2 focus-within:ring-blue-200">
-              <Search size={19} className="text-slate-400" />
-
-              <input
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                placeholder="Search students, posts, campuses..."
-                className="w-full bg-transparent text-sm outline-none placeholder:text-slate-400"
-              />
-            </div>
+            <GlobalSearch onSelect={selectSearchResult} />
           </div>
 
           <div className="flex shrink-0 items-center gap-2 sm:gap-4">
@@ -863,7 +1496,7 @@ function App() {
 
                 {unreadNotifications > 0 && (
                   <span className="absolute -right-0.5 -top-0.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white ring-2 ring-white">
-                    {unreadNotifications}
+                    {unreadNotifications > 99 ? "99+" : unreadNotifications}
                   </span>
                 )}
               </button>
@@ -881,65 +1514,60 @@ function App() {
 
                     <button
                       onClick={markNotificationsRead}
-                      className="text-xs font-semibold text-blue-700 hover:underline"
+                      disabled={unreadNotifications === 0}
+                      className="text-xs font-semibold text-blue-700 hover:underline disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       Mark all read
                     </button>
                   </div>
 
                   <div className="max-h-80 overflow-y-auto">
-                    {notifications.map((notification) => (
-                      <button
-                        key={notification.id}
-                        onClick={() => {
-                          setNotifications((previous) =>
-                            previous.map((item) =>
-                              item.id === notification.id
-                                ? { ...item, read: true }
-                                : item,
-                            ),
-                          );
-
-                          setNotificationsOpen(false);
-
-                          if (notification.id === 2) {
-                            setActivePage("Campus Match");
-                          } else if (notification.id === 3) {
-                            setActivePage("Communities");
-                          } else {
-                            setActivePage("Home Feed");
-                          }
-                        }}
-                        className={`flex w-full gap-3 border-b border-slate-100 p-4 text-left transition hover:bg-slate-50 ${
-                          !notification.read ? "bg-blue-50/60" : ""
-                        }`}
-                      >
-                        <span
-                          className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${
-                            notification.read ? "bg-slate-200" : "bg-blue-600"
-                          }`}
-                        />
-
-                        <span className="min-w-0">
-                          <span className="block text-sm font-bold text-slate-800">
-                            {notification.title}
-                          </span>
-
-                          <span className="mt-1 block text-xs leading-5 text-slate-500">
-                            {notification.message}
-                          </span>
-
-                          <span className="mt-2 block text-[11px] text-slate-400">
-                            {notification.time}
-                          </span>
-                        </span>
-                      </button>
-                    ))}
-
-                    {notifications.length === 0 && (
+                    {notificationsLoading ? (
+                      <p className="p-6 text-center text-sm text-slate-500">Loading notifications...</p>
+                    ) : notificationsError ? (
+                      <div role="alert" className="p-5 text-center">
+                        <p className="text-sm text-red-700">{notificationsError}</p>
+                        <button
+                          type="button"
+                          onClick={() => setNotificationsReload((current) => current + 1)}
+                          className="mt-3 text-sm font-semibold text-blue-700 hover:underline"
+                        >
+                          Try again
+                        </button>
+                      </div>
+                    ) : notifications.length === 0 ? (
                       <p className="p-6 text-center text-sm text-slate-500">
                         You're all caught up!
                       </p>
+                    ) : (
+                      notifications.map((notification) => (
+                        <button
+                          key={notification._id}
+                          onClick={() => openNotification(notification)}
+                          className={`flex w-full gap-3 border-b border-slate-100 p-4 text-left transition hover:bg-slate-50 ${
+                            !notification.readAt ? "bg-blue-50/60" : ""
+                          }`}
+                        >
+                          <span
+                            className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${
+                              notification.readAt ? "bg-slate-200" : "bg-blue-600"
+                            }`}
+                          />
+                          <span className="min-w-0">
+                            <span className="block text-sm font-bold text-slate-800">
+                              {notification.title}
+                            </span>
+                            <span className="mt-1 block text-xs leading-5 text-slate-500">
+                              {notification.message}
+                            </span>
+                            <span className="mt-2 block text-[11px] text-slate-400">
+                              {notification.createdAt
+                                ? new Date(notification.createdAt).toLocaleString()
+                                : ""}
+                            </span>
+                          </span>
+                        </button>
+                      ))
                     )}
                   </div>
                 </div>
@@ -1117,16 +1745,7 @@ function App() {
 
         <main className="min-w-0 px-4 py-6 pb-28 sm:px-6 lg:px-8 lg:pb-28">
           <div className="mb-6 md:hidden">
-            <div className="flex items-center gap-3 rounded-xl bg-white px-4 py-3 shadow-sm ring-1 ring-slate-200">
-              <Search size={19} className="text-slate-400" />
-
-              <input
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                placeholder="Search Campus Connect..."
-                className="w-full bg-transparent text-sm outline-none"
-              />
-            </div>
+            <GlobalSearch onSelect={selectSearchResult} />
           </div>
           <div className="mb-7">
             <p className="mb-1 text-sm font-medium text-slate-500">
@@ -1159,11 +1778,19 @@ function App() {
               user={user}
               socket={messageSocket}
               onUnreadCount={setUnreadMessages}
+              initialConversationId={notificationConversationId}
+              onInitialConversationHandled={() => setNotificationConversationId("")}
             />
           )}
 
           {activePage === "Admin Dashboard" && (
             <AdminDashboard />
+          )}
+
+          {activePage === "Discover Students" && (
+            <StudentSuggestions
+              onProfile={(id) => selectSearchResult("students", { id })}
+            />
           )}
 
           {activePage === "Campus Match" && (
@@ -1649,7 +2276,10 @@ function App() {
                     </div>
                     <button
                       type="button"
-                      onClick={() => setActivePage("Settings")}
+                      onClick={() => {
+                        setActivePage("Profile");
+                        window.setTimeout(() => document.getElementById("profile-settings")?.scrollIntoView({ behavior: "smooth" }), 0);
+                      }}
                       className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
                     >
                       <Settings size={16} className="mr-2 inline" />
@@ -1702,6 +2332,32 @@ function App() {
                   </button>
                 </div>
               </div>
+              <section id="profile-settings" className="rounded-3xl border border-slate-200 bg-white p-5 sm:p-7">
+                <h3 className="text-lg font-extrabold">Profile and privacy settings</h3>
+                <p className="mt-1 text-sm text-slate-500">Choose what campus students can discover and edit the details shown on your profile.</p>
+                {profileNotice && <p role="status" className="mt-4 rounded-xl bg-emerald-50 p-3 text-sm text-emerald-800">{profileNotice}</p>}
+                {profileError && <p role="alert" className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-800">{profileError}</p>}
+                <form onSubmit={saveProfileSettings} className="mt-5 grid gap-4 sm:grid-cols-2">
+                  <label><span className="mb-1.5 block text-sm font-semibold">Display name</span><input name="name" required maxLength={80} defaultValue={user.name || ""} className="w-full rounded-xl border border-slate-200 px-4 py-3" /></label>
+                  <label><span className="mb-1.5 block text-sm font-semibold">Profile picture URL (HTTPS)</span><input name="avatar" type="url" defaultValue={user.profile?.avatar || ""} className="w-full rounded-xl border border-slate-200 px-4 py-3" placeholder="https://..." /></label>
+                  <label><span className="mb-1.5 block text-sm font-semibold">Phone</span><input name="phone" maxLength={30} defaultValue={user.profile?.phone || ""} className="w-full rounded-xl border border-slate-200 px-4 py-3" /></label>
+                  <label><span className="mb-1.5 block text-sm font-semibold">Department</span><input name="department" maxLength={100} defaultValue={user.profile?.department || ""} className="w-full rounded-xl border border-slate-200 px-4 py-3" /></label>
+                  <label><span className="mb-1.5 block text-sm font-semibold">Level</span><input name="level" maxLength={50} defaultValue={user.profile?.level || ""} className="w-full rounded-xl border border-slate-200 px-4 py-3" /></label>
+                  <label className="sm:col-span-2"><span className="mb-1.5 block text-sm font-semibold">Biography</span><textarea name="bio" maxLength={300} rows={3} defaultValue={user.profile?.bio || ""} className="w-full rounded-xl border border-slate-200 px-4 py-3" /></label>
+                  <label><span className="mb-1.5 block text-sm font-semibold">Who can view your profile?</span><select name="profileVisibility" defaultValue={user.privacy?.profileVisibility || "campus"} className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3"><option value="public">All students</option><option value="campus">My campus</option><option value="private">Only me</option></select></label>
+                  <label><span className="mb-1.5 block text-sm font-semibold">Default post visibility</span><select name="defaultPostVisibility" defaultValue={user.privacy?.defaultPostVisibility || "campus"} className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3"><option value="public">All students</option><option value="campus">My campus</option><option value="private">Only me</option></select></label>
+                  <label className="sm:col-span-2 flex items-center gap-3 text-sm"><input name="discoverable" type="checkbox" defaultChecked={user.privacy?.discoverable !== false} className="h-4 w-4" />Allow eligible students to find my profile in discovery.</label>
+                  <button type="submit" disabled={profileSaving} className="rounded-xl bg-blue-700 px-5 py-3 text-sm font-bold text-white disabled:opacity-50 sm:col-span-2">{profileSaving ? "Saving..." : "Save profile settings"}</button>
+                </form>
+                <form onSubmit={changeAccountPassword} className="mt-8 border-t border-slate-100 pt-6">
+                  <h4 className="font-bold">Change password</h4>
+                  <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                    <label><span className="mb-1.5 block text-sm font-semibold">Current password</span><input required type="password" autoComplete="current-password" value={passwordForm.currentPassword} onChange={(event) => setPasswordForm((current) => ({ ...current, currentPassword: event.target.value }))} className="w-full rounded-xl border border-slate-200 px-4 py-3" /></label>
+                    <label><span className="mb-1.5 block text-sm font-semibold">New password (at least 8 characters)</span><input required minLength={8} maxLength={128} type="password" autoComplete="new-password" value={passwordForm.newPassword} onChange={(event) => setPasswordForm((current) => ({ ...current, newPassword: event.target.value }))} className="w-full rounded-xl border border-slate-200 px-4 py-3" /></label>
+                  </div>
+                  <button type="submit" disabled={passwordSaving} className="mt-4 rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold disabled:opacity-50">{passwordSaving ? "Updating..." : "Update password"}</button>
+                </form>
+              </section>
             </section>
           )}
           {activePage === "Marketplace" && (
@@ -1743,10 +2399,17 @@ function App() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => { loadOrders(); setOrdersOpen(true); }}
+                  onClick={() => { setDashboardView("buyer"); loadOrders(); setOrdersOpen(true); }}
                   className="ml-3 inline-flex items-center gap-2 rounded-xl border border-white/40 px-4 py-3 text-sm font-bold text-white transition hover:bg-white/10"
                 >
-                  My orders
+                  Buyer dashboard
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setDashboardView("seller"); loadOrders(); loadSellerListings(); setOrdersOpen(true); }}
+                  className="ml-3 inline-flex items-center gap-2 rounded-xl border border-white/40 px-4 py-3 text-sm font-bold text-white transition hover:bg-white/10"
+                >
+                  Seller dashboard
                 </button>
                 <button
                   type="button"
@@ -2031,7 +2694,7 @@ function App() {
                               typeof listing.seller === "object"
                                 ? listing.seller?._id || listing.seller?.id
                                 : listing.seller,
-                            ) === String(user.id) ? (
+                            ) === accountId ? (
                               <p className="mt-4 rounded-xl bg-slate-100 px-4 py-3 text-center text-sm font-bold text-slate-500">
                                 This is your listing
                               </p>
@@ -2065,23 +2728,36 @@ function App() {
                   >
                     <div className="flex items-start justify-between gap-4">
                       <div>
-                        <h3 className="text-xl font-extrabold text-slate-900">Sell an item</h3>
+                        <h3 className="text-xl font-extrabold text-slate-900">{editingListingId ? "Edit listing" : "Sell an item"}</h3>
                         <p className="mt-1 text-sm text-slate-500">Your listing will be visible to students on your campus.</p>
                       </div>
-                      <button type="button" onClick={() => setListingFormOpen(false)} aria-label="Close listing form" className="rounded-lg p-2 text-slate-500 hover:bg-slate-100">✕</button>
+                      <button type="button" onClick={resetListingForm} aria-label="Close listing form" className="rounded-lg p-2 text-slate-500 hover:bg-slate-100">✕</button>
                     </div>
 
                     <div className="mt-6 grid gap-4 sm:grid-cols-2">
                       <label className="sm:col-span-2"><span className="mb-1.5 block text-sm font-semibold">Item title</span><input required maxLength={120} value={listingForm.title} onChange={(event) => setListingForm((current) => ({ ...current, title: event.target.value }))} className="w-full rounded-xl border border-slate-200 px-4 py-3 outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100" placeholder="e.g. Calculus textbook" /></label>
                       <label className="sm:col-span-2"><span className="mb-1.5 block text-sm font-semibold">Description</span><textarea required maxLength={1000} rows={4} value={listingForm.description} onChange={(event) => setListingForm((current) => ({ ...current, description: event.target.value }))} className="w-full resize-y rounded-xl border border-slate-200 px-4 py-3 outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100" placeholder="Describe the item, its condition, and how students can use it." /></label>
                       <label><span className="mb-1.5 block text-sm font-semibold">Price (₦)</span><input required min="0" step="0.01" type="number" value={listingForm.price} onChange={(event) => setListingForm((current) => ({ ...current, price: event.target.value }))} className="w-full rounded-xl border border-slate-200 px-4 py-3 outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100" /></label>
-                      <label><span className="mb-1.5 block text-sm font-semibold">Quantity available</span><input required min="1" step="1" type="number" value={listingForm.stock} onChange={(event) => setListingForm((current) => ({ ...current, stock: event.target.value }))} className="w-full rounded-xl border border-slate-200 px-4 py-3 outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100" /></label>
+                      <label><span className="mb-1.5 block text-sm font-semibold">Quantity available</span><input required min={editingListingId ? "0" : "1"} step="1" type="number" value={listingForm.stock} onChange={(event) => setListingForm((current) => ({ ...current, stock: event.target.value }))} className="w-full rounded-xl border border-slate-200 px-4 py-3 outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100" /></label>
                       <label><span className="mb-1.5 block text-sm font-semibold">Category</span><select value={listingForm.category} onChange={(event) => setListingForm((current) => ({ ...current, category: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 outline-none focus:border-blue-600"><option value="electronics">Electronics</option><option value="fashion">Fashion</option><option value="books">Books</option><option value="food">Food</option><option value="services">Services</option><option value="school_items">School Items</option><option value="others">Others</option></select></label>
                       <label><span className="mb-1.5 block text-sm font-semibold">Condition</span><select value={listingForm.condition} onChange={(event) => setListingForm((current) => ({ ...current, condition: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 outline-none focus:border-blue-600"><option value="new">New</option><option value="used">Used</option><option value="fair">Fair</option></select></label>
-                      <label className="sm:col-span-2"><span className="mb-1.5 block text-sm font-semibold">Photos <span className="font-normal text-slate-400">(up to 4 files, 25 MB each)</span></span><input type="file" accept="image/*" multiple onChange={(event) => setListingForm((current) => ({ ...current, media: Array.from(event.target.files || []) }))} className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm file:mr-4 file:rounded-lg file:border-0 file:bg-blue-50 file:px-3 file:py-2 file:font-semibold file:text-blue-700" /></label>
-                      <label className="sm:col-span-2 flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950"><input required type="checkbox" checked={listingForm.sellerTermsAccepted} onChange={(event) => setListingForm((current) => ({ ...current, sellerTermsAccepted: event.target.checked }))} className="mt-0.5 h-4 w-4" /><span>I confirm that this listing is genuine, I will not engage in fraudulent activity, and I accept Campus Connect’s 7% commission on each completed sale plus any applicable marketplace terms.</span></label>
+                      {listingForm.existingImages.length > 0 && (
+                        <div className="sm:col-span-2">
+                          <p className="mb-2 text-sm font-semibold">Current photos</p>
+                          <div className="flex flex-wrap gap-3">
+                            {listingForm.existingImages.map((image, index) => (
+                              <div key={`${image}-${index}`} className="relative">
+                                <img src={image} alt={`Listing photo ${index + 1}`} className="h-20 w-20 rounded-lg object-cover" />
+                                <button type="button" aria-label={`Remove photo ${index + 1}`} onClick={() => setListingForm((current) => ({ ...current, existingImages: current.existingImages.filter((_, itemIndex) => itemIndex !== index) }))} className="absolute -right-2 -top-2 rounded-full bg-white p-1 shadow">✕</button>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      <label className="sm:col-span-2"><span className="mb-1.5 block text-sm font-semibold">Photos <span className="font-normal text-slate-400">(up to 4 files, 25 MB each)</span></span><input type="file" accept="image/jpeg,image/png,image/gif,image/webp" multiple onChange={selectListingMedia} className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm file:mr-4 file:rounded-lg file:border-0 file:bg-blue-50 file:px-3 file:py-2 file:font-semibold file:text-blue-700" /></label>
+                      {!editingListingId && <label className="sm:col-span-2 flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950"><input required type="checkbox" checked={listingForm.sellerTermsAccepted} onChange={(event) => setListingForm((current) => ({ ...current, sellerTermsAccepted: event.target.checked }))} className="mt-0.5 h-4 w-4" /><span>I confirm that this listing is genuine, I will not engage in fraudulent activity, and I accept Campus Connect’s 7% commission on each completed sale plus any applicable marketplace terms.</span></label>}
                     </div>
-                    <button type="submit" disabled={marketplaceSubmitting} className="mt-6 w-full rounded-xl bg-blue-700 px-5 py-3.5 text-sm font-bold text-white hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-60">{marketplaceSubmitting ? "Publishing..." : "Publish listing"}</button>
+                    <button type="submit" disabled={marketplaceSubmitting} className="mt-6 w-full rounded-xl bg-blue-700 px-5 py-3.5 text-sm font-bold text-white hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-60">{marketplaceSubmitting ? "Saving..." : editingListingId ? "Save changes" : "Publish listing"}</button>
                   </form>
                 </div>
               )}
@@ -2105,11 +2781,87 @@ function App() {
               {ordersOpen && (
                 <div className="fixed inset-0 z-[60] flex items-end bg-slate-950/50 sm:items-center sm:justify-center sm:p-4">
                   <div className="max-h-[90vh] w-full overflow-y-auto rounded-t-3xl bg-white p-5 shadow-2xl sm:max-w-2xl sm:rounded-3xl sm:p-7">
-                    <div className="flex items-start justify-between gap-4"><div><h3 className="text-xl font-extrabold">My orders</h3><p className="mt-1 text-sm text-slate-500">Track purchases and orders placed for your listings.</p></div><button type="button" onClick={() => setOrdersOpen(false)} aria-label="Close orders" className="rounded-lg p-2 text-slate-500 hover:bg-slate-100">✕</button></div>
-                    {ordersLoading ? <p className="py-10 text-center text-sm text-slate-500">Loading orders...</p> : orders.length === 0 ? <p className="py-10 text-center text-sm text-slate-500">You do not have any orders yet.</p> : <div className="mt-5 space-y-3">{orders.map((order) => {
-                      const isSeller = String(order.seller?._id || order.seller) === String(user.id);
-                      return <article key={order._id} className="rounded-2xl border border-slate-200 p-4"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="font-extrabold text-slate-900">{order.listing?.title || "Marketplace item"}</p><p className="mt-1 text-sm text-slate-500">{isSeller ? `Buyer: ${order.buyer?.name || "Student"}` : `Seller: ${order.seller?.name || "Student"}`}</p></div><span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-bold text-blue-700">{order.status.replaceAll("_", " ")}</span></div><div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-sm text-slate-600"><span>₦{Number(order.totalAmount).toLocaleString()}</span><span>Qty: {order.quantity}</span><span>Payment: {order.paymentStatus}</span><span>Delivery: {order.deliveryStatus}</span></div><p className="mt-3 text-sm font-semibold text-slate-700">{order.deliveryMethod === "MIDDLEMAN" ? `Campus Connect middleman · ₦${Number(order.deliveryFee || 0).toLocaleString()} fee` : "Seller-to-buyer delivery"}</p>{isSeller && <p className="mt-1 text-xs text-slate-500">Campus Connect commission: ₦{Number(order.platformCommission || 0).toLocaleString()} · Your payout after OTP verification: ₦{Number(order.sellerPayoutAmount || 0).toLocaleString()}</p>}{(isSeller || (order.deliveryMethod === "MIDDLEMAN" && user.role === "admin")) && order.status === "DELIVERED" && <div className="mt-4 flex gap-2"><input inputMode="numeric" maxLength={6} value={deliveryOtpInputs[order._id] || ""} onChange={(event) => setDeliveryOtpInputs((current) => ({ ...current, [order._id]: event.target.value }))} placeholder="Buyer’s 6-digit OTP" className="min-w-0 flex-1 rounded-xl border border-slate-200 px-3 py-2 text-sm" /><button type="button" onClick={() => verifyDeliveryOtp(order._id)} className="rounded-xl bg-blue-700 px-3 py-2 text-sm font-bold text-white">Verify</button></div>}<p className="mt-3 text-xs text-slate-500">{new Date(order.createdAt).toLocaleString()}</p></article>;
-                    })}</div>}
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <h3 className="text-xl font-extrabold">{dashboardView === "seller" ? "Seller dashboard" : "Buyer dashboard"}</h3>
+                        <p className="mt-1 text-sm text-slate-500">{dashboardView === "seller" ? "Manage listings, orders, and payout progress." : "Track your purchases, payments, and delivery."}</p>
+                      </div>
+                      <button type="button" onClick={() => setOrdersOpen(false)} aria-label="Close dashboard" className="rounded-lg p-2 text-slate-500 hover:bg-slate-100">✕</button>
+                    </div>
+                    <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-3">
+                      {(dashboardView === "seller" ? sellerOrderStats : buyerOrderStats).map(([label, count]) => (
+                        <div key={label} className="rounded-xl bg-slate-50 p-3">
+                          <p className="text-xs text-slate-500">{label}</p>
+                          <p className="mt-1 text-xl font-extrabold text-slate-900">
+                            {dashboardView === "buyer" && ordersError
+                              ? "—"
+                              : dashboardView === "seller" &&
+                                  ((label.includes("listing") || label === "Unavailable" || label === "Taken down")
+                                    ? sellerListingsError
+                                    : ordersError)
+                                ? "—"
+                                : count}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                    {dashboardView === "seller" && (
+                      <section className="mt-6">
+                        <div className="flex items-center justify-between gap-3">
+                          <h4 className="font-extrabold">Your listings</h4>
+                          <button type="button" onClick={() => { setOrdersOpen(false); setListingFormOpen(true); setMarketplaceError(""); }} className="rounded-lg bg-blue-700 px-3 py-2 text-xs font-bold text-white">Add listing</button>
+                        </div>
+                        {sellerListingsError && <p role="alert" className="mt-3 rounded-xl bg-red-50 p-3 text-sm text-red-800">{sellerListingsError}</p>}
+                        {sellerListingsLoading ? <p className="py-5 text-sm text-slate-500">Loading your listings...</p> : sellerListingsError ? null : sellerListings.length === 0 ? <p className="py-5 text-sm text-slate-500">You have not listed any products yet.</p> : (
+                          <div className="mt-3 space-y-3">
+                            {sellerListings.map((listing) => (
+                              <article key={listing._id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 p-3">
+                                <div className="flex min-w-0 items-center gap-3">
+                                  {listing.images?.[0] && <img src={listing.images[0]} alt="" className="h-12 w-12 rounded-lg object-cover" />}
+                                  <div className="min-w-0">
+                                    <p className="truncate text-sm font-bold">{listing.title}</p>
+                                    <p className="text-xs text-slate-500">₦{Number(listing.price).toLocaleString()} · Stock {listing.stock} · {listing.status.replaceAll("_", " ")}</p>
+                                  </div>
+                                </div>
+                                <div className="flex gap-2">
+                                  <button type="button" onClick={() => editListing(listing)} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold">Edit</button>
+                                  {listing.status !== "sold" && <button type="button" disabled={listingActionId === listing._id} onClick={() => changeListingStatus(listing)} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold disabled:opacity-50">{listingActionId === listing._id ? "Saving..." : listing.status === "hidden" ? "Restore" : "Take down"}</button>}
+                                </div>
+                              </article>
+                            ))}
+                          </div>
+                        )}
+                      </section>
+                    )}
+                    <section className="mt-6">
+                      <h4 className="font-extrabold">{dashboardView === "seller" ? "Orders for your listings" : "Your orders"}</h4>
+                      {ordersError && <p role="alert" className="mt-3 rounded-xl bg-red-50 p-3 text-sm text-red-800">{ordersError}</p>}
+                      {ordersLoading ? <p className="py-8 text-center text-sm text-slate-500">Loading orders...</p> : ordersError ? null : dashboardOrders.length === 0 ? <p className="py-8 text-center text-sm text-slate-500">{dashboardView === "seller" ? "No students have ordered your listings yet." : "You do not have any orders yet."}</p> : (
+                        <div className="mt-3 space-y-3">
+                          {dashboardOrders.map((order) => {
+                            const isSeller = dashboardView === "seller";
+                            return (
+                              <article key={order._id} className="rounded-2xl border border-slate-200 p-4">
+                                <div className="flex flex-wrap items-start justify-between gap-3">
+                                  <div>
+                                    <p className="font-extrabold text-slate-900">{order.listing?.title || "Marketplace item"}</p>
+                                    <p className="mt-1 text-sm text-slate-500">{isSeller ? `Buyer: ${order.buyer?.name || "Student"}` : `Seller: ${order.seller?.name || "Student"}`}</p>
+                                  </div>
+                                  <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-bold text-blue-700">{order.status.replaceAll("_", " ")}</span>
+                                </div>
+                                <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-sm text-slate-600">
+                                  <span>₦{Number(order.totalAmount).toLocaleString()}</span><span>Qty: {order.quantity}</span><span>Payment: {order.paymentStatus}</span><span>Delivery: {order.deliveryStatus}</span>
+                                </div>
+                                <p className="mt-3 text-sm font-semibold text-slate-700">{order.deliveryMethod === "MIDDLEMAN" ? `Campus Connect middleman · ₦${Number(order.deliveryFee || 0).toLocaleString()} fee` : "Seller-to-buyer delivery"}</p>
+                                {isSeller && <p className="mt-1 text-xs text-slate-500">Payout: {order.sellerPayoutStatus} · ₦{Number(order.sellerPayoutAmount || 0).toLocaleString()} after ₦{Number(order.platformCommission || 0).toLocaleString()} commission</p>}
+                                {(isSeller || (order.deliveryMethod === "MIDDLEMAN" && user.role === "admin")) && order.status === "DELIVERED" && <div className="mt-4 flex gap-2"><input inputMode="numeric" maxLength={6} value={deliveryOtpInputs[order._id] || ""} onChange={(event) => setDeliveryOtpInputs((current) => ({ ...current, [order._id]: event.target.value }))} placeholder="Buyer’s 6-digit OTP" className="min-w-0 flex-1 rounded-xl border border-slate-200 px-3 py-2 text-sm" /><button type="button" onClick={() => verifyDeliveryOtp(order._id)} className="rounded-xl bg-blue-700 px-3 py-2 text-sm font-bold text-white">Verify</button></div>}
+                                <p className="mt-3 text-xs text-slate-500">{new Date(order.createdAt).toLocaleString()}</p>
+                              </article>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </section>
                   </div>
                 </div>
               )}
@@ -2145,35 +2897,66 @@ function App() {
             </section>
           )}
 
+          {activePage === "Settings" && (
+            <section className="rounded-3xl border border-slate-200 bg-white p-8 text-center">
+              <Settings size={32} className="mx-auto text-blue-700" />
+              <h3 className="mt-4 text-xl font-extrabold">Coming Soon</h3>
+              <p className="mt-2 text-sm text-slate-500">
+                Account profile, privacy, and password settings are available from your Profile page.
+              </p>
+              <button type="button" onClick={() => setActivePage("Profile")} className="mt-5 rounded-xl bg-blue-700 px-4 py-3 text-sm font-bold text-white">
+                Open profile settings
+              </button>
+            </section>
+          )}
           {activePage !== "Home Feed" &&
             activePage !== "Campus News" &&
             activePage !== "Campus Services" &&
             activePage !== "Campus Match" &&
             activePage !== "Messages" &&
             activePage !== "Admin Dashboard" &&
+            activePage !== "Discover Students" &&
             activePage !== "Profile" &&
+            activePage !== "Settings" &&
             activePage !== "Marketplace" && (
               <div className="mb-5 rounded-2xl border border-blue-100 bg-blue-50 p-5">
-                <h3 className="font-bold text-blue-900">
-                  {activePage} is ready for development
-                </h3>
+                <h3 className="font-bold text-blue-900">Coming Soon</h3>
 
                 <p className="mt-2 text-sm leading-6 text-blue-800">
-                  This section will be connected to the backend in the next
-                  stages.
+                  {activePage} is not available yet. We’ll let you know when this section is ready.
                 </p>
               </div>
             )}
           {activePage === "Home Feed" && (
             <>
-              <div className="mb-5 flex items-center justify-between">
+              <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
                 <h3 className="text-lg font-extrabold">Campus Feed</h3>
-
-                <span className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600">
-                  Latest posts
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600">
+                    Latest posts
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => { setPostNotice(""); setPostComposerOpen(true); }}
+                    className="inline-flex items-center gap-2 rounded-xl bg-blue-700 px-4 py-2.5 text-sm font-bold text-white hover:bg-blue-800"
+                  >
+                    <Plus size={17} />
+                    Create Post
+                  </button>
+                </div>
               </div>
 
+              {activeTrendTag && (
+                <div className="mb-4 flex items-center justify-between rounded-xl bg-blue-50 px-4 py-3 text-sm text-blue-900">
+                  <span>Showing posts tagged with <strong>{activeTrendTag}</strong></span>
+                  <button type="button" onClick={() => setActiveTrendTag("")} className="font-bold underline">Clear filter</button>
+                </div>
+              )}
+              {postNotice && <p role="status" className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">{postNotice}</p>}
+              {postActionError && <p role="alert" className="mb-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{postActionError}</p>}
+              {postActionNotice && <p role="status" className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">{postActionNotice}</p>}
+              {postsError && <div role="alert" className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800"><span>{postsError}</span><button type="button" onClick={() => setPostsReload((current) => current + 1)} className="rounded-lg bg-red-100 px-3 py-2 font-semibold">Try again</button></div>}
+              {postsLoading && <p className="mb-4 text-sm text-slate-500">Loading campus posts...</p>}
               <div className="space-y-5">
                 {filteredPosts.map((post) => (
                   <article
@@ -2205,43 +2988,41 @@ function App() {
                         </p>
                       </div>
 
-                      <span className="shrink-0 rounded-full bg-blue-50 px-2.5 py-1 text-[10px] font-bold text-blue-700">
-                        {post.category}
-                      </span>
+                      {post.authorId === String(user._id || user.id) && (
+                        <div className="flex shrink-0 gap-2">
+                          <button type="button" onClick={() => setEditingPost(post)} className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">Edit</button>
+                          <button type="button" onClick={() => removePost(post.id)} className="rounded-lg border border-red-100 px-2.5 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50">Delete</button>
+                        </div>
+                      )}
+                      {post.authorId !== String(user._id || user.id) && (
+                        <button type="button" onClick={() => reportPost(post.id)} className="shrink-0 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-slate-500 hover:bg-slate-50">Report</button>
+                      )}
                     </div>
 
                     <p className="mt-4 whitespace-pre-wrap text-sm leading-7 text-slate-700">
                       {post.text}
                     </p>
 
+                    {post.media?.url && (
+                      post.media.type === "video"
+                        ? <video src={post.media.url} controls preload="metadata" className="mt-4 max-h-[34rem] w-full rounded-xl bg-black object-contain" aria-label="Post video" />
+                        : <img src={post.media.url} alt="Post attachment" loading="lazy" className="mt-4 max-h-[34rem] w-full rounded-xl object-contain" />
+                    )}
+
                     <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-4">
                       <button
-                        onClick={() => toggleLike(post.id)}
-                        className={`flex items-center gap-2 rounded-lg px-2 py-2 text-xs font-medium transition hover:bg-slate-50 ${
-                          likedPosts.includes(post.id)
-                            ? "text-red-500"
-                            : "text-slate-500"
-                        }`}
+                        type="button"
+                        disabled={pendingPostLikes.has(post.id)}
+                        onClick={() => togglePostLike(post)}
+                        className={`flex items-center gap-2 rounded-lg px-2 py-2 text-xs font-medium transition hover:bg-slate-50 disabled:opacity-50 ${post.likedByMe ? "text-red-500" : "text-slate-500"}`}
                       >
-                        <Heart
-                          size={18}
-                          fill={
-                            likedPosts.includes(post.id)
-                              ? "currentColor"
-                              : "none"
-                          }
-                        />
-                        {post.likes + (likedPosts.includes(post.id) ? 1 : 0)}{" "}
-                        Likes
+                        <Heart size={18} fill={post.likedByMe ? "currentColor" : "none"} />
+                        {post.likes} Likes
                       </button>
 
                       <button
                         type="button"
-                        onClick={() =>
-                          window.alert(
-                            "Comments will be available when the comments feature is connected.",
-                          )
-                        }
+                        onClick={() => openPostComments(post.id)}
                         className="flex items-center gap-2 rounded-lg px-2 py-2 text-xs font-medium text-slate-500 hover:bg-slate-50"
                       >
                         <MessageSquare size={18} />
@@ -2250,25 +3031,41 @@ function App() {
 
                       <button
                         type="button"
-                        onClick={async () => {
-                          try {
-                            await navigator.clipboard.writeText(
-                              `${post.name}: ${post.text}`,
-                            );
-
-                            window.alert("Post copied to clipboard.");
-                          } catch {
-                            window.alert(
-                              "Unable to copy this post on your device.",
-                            );
-                          }
-                        }}
+                        onClick={() => sharePost(post)}
                         className="flex items-center gap-2 rounded-lg px-2 py-2 text-xs font-medium text-slate-500 hover:bg-slate-50"
                       >
                         <Share2 size={18} />
                         <span className="hidden sm:inline">Share</span>
                       </button>
                     </div>
+                    {commentsForPost === post.id && (
+                      <section className="mt-4 border-t border-slate-100 pt-4" aria-label="Post comments">
+                        {commentsLoading ? <p className="text-sm text-slate-500">Loading comments...</p> : (
+                          <div className="space-y-4">
+                            {postComments.map((comment) => (
+                              <div key={comment._id} className="rounded-xl bg-slate-50 p-3">
+                                {renderComment(comment)}
+                                {commentReplies[comment._id]?.map((reply) => (
+                                  <div key={reply._id} className="ml-5 mt-3 border-l-2 border-blue-100 pl-3">
+                                    {renderComment(reply)}
+                                  </div>
+                                ))}
+                                <button type="button" onClick={() => loadCommentReplies(post.id, comment._id)} className="mt-2 text-xs font-semibold text-slate-500">Load replies</button>
+                                {!comment.isDeleted && (
+                                  <button type="button" onClick={() => { setCommentReplyTo(comment); setCommentDraft(""); }} className="mt-2 text-xs font-bold text-blue-700">Reply</button>
+                                )}
+                              </div>
+                            ))}
+                            {!postComments.length && <p className="text-sm text-slate-500">No comments yet. Start the conversation.</p>}
+                          </div>
+                        )}
+                        {commentReplyTo && <p className="mt-3 text-xs text-slate-500">Replying to {commentReplyTo.author?.name || "student"} <button type="button" onClick={() => setCommentReplyTo(null)} className="ml-2 font-bold text-blue-700">Cancel</button></p>}
+                        <form onSubmit={(event) => submitPostComment(event, post.id)} className="mt-3 flex gap-2">
+                          <input value={commentDraft} onChange={(event) => setCommentDraft(event.target.value)} maxLength={2000} placeholder={commentReplyTo ? "Write a reply..." : "Write a comment..."} className="min-w-0 flex-1 rounded-xl border border-slate-200 px-3 py-2.5 text-sm" />
+                          <button type="submit" disabled={commentSaving || !commentDraft.trim()} className="rounded-xl bg-blue-700 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-50">{commentSaving ? "Sending..." : "Send"}</button>
+                        </form>
+                      </section>
+                    )}
                   </article>
                 ))}
 
@@ -2284,6 +3081,31 @@ function App() {
                   </div>
                 )}
               </div>
+              {feedHasMore && (
+                <button type="button" disabled={feedLoadingMore} onClick={async () => {
+                  setFeedLoadingMore(true);
+                  try {
+                    const data = await apiRequest(`/api/posts?page=${feedPage + 1}`);
+                    const label = institutionName || campusName || "Campus Connect Student";
+                    setPosts((current) => {
+                      const known = new Set(current.map((post) => post.id));
+                      return [...current, ...(data.posts || []).filter((item) => !known.has(String(item._id))).map((item) => normalizePost(item, label))];
+                    });
+                    setFeedPage(data.page || feedPage + 1);
+                    setFeedHasMore(Boolean(data.hasMore));
+                  } catch (error) {
+                    setPostActionError(error.message || "We couldn't load more posts.");
+                  } finally {
+                    setFeedLoadingMore(false);
+                  }
+                }} className="mt-5 w-full rounded-xl border border-slate-200 bg-white py-3 text-sm font-bold text-blue-700 disabled:opacity-50">{feedLoadingMore ? "Loading..." : "Load more posts"}</button>
+              )}
+              {postComposerOpen && (
+                <PostComposer
+                  onClose={() => setPostComposerOpen(false)}
+                  onPublished={addPublishedPost}
+                />
+              )}
             </>
           )}
           <footer className="py-8 text-center text-xs text-slate-400">
@@ -2294,34 +3116,47 @@ function App() {
         <aside className="hidden space-y-6 px-5 py-6 xl:block">
           <section className="rounded-2xl border border-slate-200 bg-white p-5">
             <div className="mb-4 flex items-center justify-between">
-              <h3 className="font-extrabold">Trending Nationwide</h3>
+              <h3 className="font-extrabold">Trending on your campus</h3>
 
               <TrendingUp size={18} className="text-orange-500" />
             </div>
 
             <p className="mb-4 text-xs leading-5 text-slate-500">
-              Topics students across Nigeria are talking about.
+              Popular posts and topics from your campus community.
             </p>
 
             <div className="space-y-4">
-              {trends.map((trend, index) => (
+              {trendingLoading && <p className="text-sm text-slate-500">Loading current trends...</p>}
+              {trendingError && <p role="alert" className="text-sm text-red-700">{trendingError}</p>}
+              {trending.hashtags.map((tag, index) => (
                 <button
-                  key={trend.tag}
+                  key={tag.tag}
                   onClick={() => {
-                    setSearch(trend.tag.replace("#", ""));
+                    setActiveTrendTag(tag.tag);
                     setActivePage("Home Feed");
+                    setSelectedSearchResult(null);
                   }}
                   className="block w-full text-left"
                 >
                   <p className="text-sm font-bold text-blue-700 hover:underline">
-                    {trend.tag}
+                    {tag.tag}
                   </p>
 
                   <p className="mt-1 text-xs text-slate-400">
-                    {trend.posts} · #{index + 1} trending
+                    {tag.posts} posts · #{index + 1} trending
                   </p>
                 </button>
               ))}
+              {trending.posts.slice(0, 3).map((post, index) => (
+                <button key={post._id} type="button" onClick={() => selectSearchResult("posts", post)} className="block w-full border-t border-slate-100 pt-3 text-left">
+                  <p className="text-xs font-semibold uppercase text-slate-400">Trending post #{index + 1}</p>
+                  <p className="mt-1 line-clamp-2 text-sm text-slate-700">{post.text || "Post with media"}</p>
+                  <p className="mt-1 text-xs text-slate-400">{post.likes} likes · {post.comments} comments · {post.shares} shares</p>
+                </button>
+              ))}
+              {!trendingLoading && !trendingError && !trending.hashtags.length && !trending.posts.length && (
+                <p className="text-sm text-slate-500">No trending posts yet. Start a conversation in your feed.</p>
+              )}
             </div>
 
             <button
@@ -2496,6 +3331,81 @@ function App() {
           })}
         </div>
       </nav>
+      {editingPost && (
+        <div className="fixed inset-0 z-[90] flex items-end justify-center bg-slate-950/50 sm:items-center sm:p-4">
+          <form onSubmit={savePostEdit} role="dialog" aria-modal="true" aria-labelledby="edit-post-title" className="w-full rounded-t-3xl bg-white p-5 shadow-2xl sm:max-w-xl sm:rounded-3xl sm:p-7">
+            <div className="flex items-center justify-between gap-3">
+              <h2 id="edit-post-title" className="text-xl font-extrabold">Edit your post</h2>
+              <button type="button" disabled={postEditSaving} onClick={() => setEditingPost(null)} aria-label="Close edit post form" className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"><X size={20} /></button>
+            </div>
+            <label className="mt-5 block text-sm font-semibold">Post text
+              <textarea name="text" defaultValue={editingPost.text} maxLength={2000} rows={5} className="mt-2 w-full rounded-xl border border-slate-200 p-3 text-sm" />
+            </label>
+            <label className="mt-4 block text-sm font-semibold">Who can see this post?
+              <select name="visibility" defaultValue={editingPost.visibility} className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm">
+                <option value="campus">My campus</option>
+                <option value="public">All students</option>
+                <option value="private">Only me</option>
+              </select>
+            </label>
+            {postActionError && <p role="alert" className="mt-3 rounded-xl bg-red-50 p-3 text-sm text-red-800">{postActionError}</p>}
+            <div className="mt-5 flex justify-end gap-3">
+              <button type="button" disabled={postEditSaving} onClick={() => setEditingPost(null)} className="rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold">Cancel</button>
+              <button type="submit" disabled={postEditSaving} className="rounded-xl bg-blue-700 px-5 py-3 text-sm font-bold text-white disabled:opacity-50">{postEditSaving ? "Saving..." : "Save changes"}</button>
+            </div>
+          </form>
+        </div>
+      )}
+      {selectedSearchResult && (
+        <div className="fixed inset-0 z-[85] flex items-end justify-center bg-slate-950/50 sm:items-center sm:p-4" onMouseDown={(event) => {
+          if (event.target === event.currentTarget) setSelectedSearchResult(null);
+        }}>
+          <section role="dialog" aria-modal="true" aria-labelledby="search-result-title" className="max-h-[90vh] w-full overflow-y-auto rounded-t-3xl bg-white p-5 shadow-2xl sm:max-w-xl sm:rounded-3xl sm:p-7">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-wide text-blue-700">{selectedSearchResult.type}</p>
+                <h2 id="search-result-title" className="mt-1 text-xl font-extrabold">{selectedSearchResult.type === "posts" ? `Post by ${selectedSearchResult.item.name}` : selectedSearchResult.item.name || selectedSearchResult.item.title || "Search result"}</h2>
+              </div>
+              <button type="button" onClick={() => setSelectedSearchResult(null)} aria-label="Close search result" className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"><X size={20} /></button>
+            </div>
+            {selectedSearchResult.type === "students" && (
+              <div className="mt-5">
+                {selectedSearchResult.item.avatar && <img src={selectedSearchResult.item.avatar} alt="" className="mb-4 h-20 w-20 rounded-full object-cover" />}
+                <p className="text-sm text-slate-600">{[selectedSearchResult.item.institution, selectedSearchResult.item.campus, selectedSearchResult.item.department, selectedSearchResult.item.level].filter(Boolean).join(" · ")}</p>
+                {selectedSearchResult.item.bio && <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-700">{selectedSearchResult.item.bio}</p>}
+                {selectedSearchResult.item.isVerifiedStudent && <p className="mt-3 text-sm font-semibold text-blue-700">Verified student</p>}
+              </div>
+            )}
+            {selectedSearchResult.type === "posts" && (
+              <div className="mt-5">
+                <p className="whitespace-pre-wrap text-sm leading-7 text-slate-700">{selectedSearchResult.item.text || "Post with media"}</p>
+                {selectedSearchResult.item.media?.url && (selectedSearchResult.item.media.type === "video"
+                  ? <video src={selectedSearchResult.item.media.url} controls className="mt-4 max-h-80 w-full rounded-xl bg-black" />
+                  : <img src={selectedSearchResult.item.media.url} alt="Post attachment" className="mt-4 max-h-80 w-full rounded-xl object-contain" />)}
+              </div>
+            )}
+            {["news", "groups", "marketplace"].includes(selectedSearchResult.type) && (
+              <div className="mt-5">
+                {selectedSearchResult.type === "marketplace" && selectedSearchResult.item.images?.[0] && <img src={selectedSearchResult.item.images[0]} alt="" className="mb-4 max-h-64 w-full rounded-xl object-contain" />}
+                {selectedSearchResult.type === "marketplace" && <p className="font-bold text-blue-700">₦{Number(selectedSearchResult.item.price).toLocaleString()} · {selectedSearchResult.item.category}</p>}
+                {selectedSearchResult.item.description && <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-700">{selectedSearchResult.item.description}</p>}
+                {selectedSearchResult.item.content && <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-700">{selectedSearchResult.item.content}</p>}
+                {selectedSearchResult.type === "groups" && <p className="mt-3 text-sm text-slate-500">{selectedSearchResult.item.memberCount ?? selectedSearchResult.item.members?.length ?? 0} members</p>}
+              </div>
+            )}
+            <div className="mt-6 flex justify-end gap-3">
+              <button type="button" onClick={() => setSelectedSearchResult(null)} className="rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold">Close</button>
+              {selectedSearchResult.type !== "posts" && selectedSearchResult.type !== "students" && (
+                <button type="button" onClick={() => {
+                  const destinations = { marketplace: "Marketplace", news: "Campus News", groups: "Communities" };
+                  setActivePage(destinations[selectedSearchResult.type]);
+                  setSelectedSearchResult(null);
+                }} className="rounded-xl bg-blue-700 px-4 py-3 text-sm font-bold text-white">Open section</button>
+              )}
+            </div>
+          </section>
+        </div>
+      )}
     </div>
   );
 }

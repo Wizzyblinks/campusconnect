@@ -3,6 +3,7 @@ import Conversation from "../models/Conversation.js";
 import DirectMessage from "../models/DirectMessage.js";
 import User from "../models/User.js";
 import VibeCheckInteraction from "../models/VibeCheckInteraction.js";
+import { isConversationParticipant } from "./conversationAccess.js";
 
 export class MessagingError extends Error {
   constructor(status, message) {
@@ -25,10 +26,7 @@ export const loadAuthorizedConversation = async (
     throw new MessagingError(404, "Conversation not found");
   }
 
-  const isParticipant = conversation.participants.some(
-    (participant) => participant.toString() === userId.toString(),
-  );
-  if (!isParticipant) {
+  if (!isConversationParticipant(conversation.participants, userId)) {
     throw new MessagingError(403, "You are not part of this conversation");
   }
 
@@ -65,7 +63,6 @@ export const loadAuthorizedConversation = async (
   if (sender.isRestricted || receiver.isRestricted) {
     throw new MessagingError(403, "Messaging is unavailable for this account");
   }
-
   const block = await VibeCheckInteraction.exists({
     action: "BLOCK",
     $or: [
@@ -87,6 +84,19 @@ export const persistDirectMessage = async ({
   content,
   clientMessageId,
 }) => {
+  const [sender, receiver] = await Promise.all([
+    User.findById(senderId).select("isVerifiedStudent"),
+    User.findById(receiverId).select("isVerifiedStudent"),
+  ]);
+  if (!sender || !receiver) {
+    throw new MessagingError(404, "Conversation participant not found");
+  }
+  if (!sender.isVerifiedStudent && receiver.isVerifiedStudent) {
+    throw new MessagingError(
+      403,
+      "You must be a paid verified user to message a verified student",
+    );
+  }
   if (typeof content !== "string") {
     throw new MessagingError(400, "Message must be text");
   }

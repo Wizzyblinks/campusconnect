@@ -11,14 +11,28 @@ const listingCategories = [
   "others",
 ];
 const listingConditions = ["new", "used", "fair"];
+const isImageBuffer = (buffer) =>
+  (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) ||
+  buffer.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) ||
+  /^GIF8[79]a$/.test(buffer.subarray(0, 6).toString("ascii")) ||
+  (buffer.subarray(0, 4).toString("ascii") === "RIFF" &&
+    buffer.subarray(8, 12).toString("ascii") === "WEBP");
 
 const normalizeImageUrls = (images) => {
+  let inputImages = images;
+  if (typeof inputImages === "string" && inputImages.trim().startsWith("[")) {
+    try {
+      inputImages = JSON.parse(inputImages);
+    } catch {
+      return null;
+    }
+  }
   const urls =
-    images === undefined || images === null || images === ""
+    inputImages === undefined || inputImages === null || inputImages === ""
       ? []
-      : Array.isArray(images)
-        ? images
-        : [images];
+      : Array.isArray(inputImages)
+        ? inputImages
+        : [inputImages];
 
   if (
     urls.some((image) => {
@@ -160,16 +174,24 @@ export const createListing = async (req, res) => {
     }
 
     const files = req.files || [];
+    if (normalizedImages.length + files.length > 4) {
+      return res.status(400).json({
+        message: "A listing can have no more than four photos.",
+      });
+    }
+    if (files.some((file) =>
+      !Buffer.isBuffer(file.buffer) ||
+      !["image/jpeg", "image/png", "image/gif", "image/webp"].includes(file.mimetype) ||
+      !isImageBuffer(file.buffer),
+    )) {
+      return res.status(400).json({
+        message: "Choose valid JPG, PNG, GIF, or WebP image files.",
+      });
+    }
     if (files.length > 0 && !isCloudinaryConfigured()) {
       return res.status(503).json({
         message:
           "Marketplace image storage is not configured. Please contact support.",
-      });
-    }
-
-    if (files.some((file) => !Buffer.isBuffer(file.buffer))) {
-      return res.status(400).json({
-        message: "Marketplace media could not be read. Please re-upload it.",
       });
     }
 
@@ -252,10 +274,22 @@ export const getMarketplaceListings = async (req, res) => {
       listings,
     });
   } catch (error) {
+    console.error("Fetch marketplace listings failed:", error.message);
     res.status(500).json({
       message: "Failed to fetch marketplace listings",
-      error: error.message,
     });
+  }
+};
+
+export const getMyListings = async (req, res) => {
+  try {
+    const listings = await MarketplaceListing.find({ seller: req.user._id })
+      .sort({ updatedAt: -1 })
+      .lean();
+    return res.json({ count: listings.length, listings });
+  } catch (error) {
+    console.error("Fetch seller listings failed:", error.message);
+    return res.status(500).json({ message: "We couldn't load your listings right now." });
   }
 };
 
@@ -272,6 +306,14 @@ export const getListingById = async (req, res) => {
       });
     }
 
+    const listingSellerId = listing.seller?._id || listing.seller;
+    if (
+      (listing.status !== "active" || listing.stock <= 0) &&
+      String(listingSellerId) !== String(req.user._id)
+    ) {
+      return res.status(404).json({ message: "Listing not found" });
+    }
+
     listing.views += 1;
     await listing.save();
 
@@ -279,14 +321,15 @@ export const getListingById = async (req, res) => {
       listing,
     });
   } catch (error) {
+    console.error("Fetch marketplace listing failed:", error.message);
     res.status(500).json({
       message: "Failed to fetch listing",
-      error: error.message,
     });
   }
 };
 
 export const updateListing = async (req, res) => {
+  const uploadedAssets = [];
   try {
     const listing = await MarketplaceListing.findById(req.params.id);
 
@@ -302,6 +345,76 @@ export const updateListing = async (req, res) => {
       });
     }
 
+    const editableFields = ["title", "description", "price", "category", "condition", "stock"];
+    if (Object.keys(req.body).some((field) => ![...editableFields, "images", "status"].includes(field))) {
+      return res.status(400).json({ message: "Some listing details couldn't be updated. Please refresh and try again." });
+    }
+
+    if (req.body.title !== undefined && (typeof req.body.title !== "string" || !req.body.title.trim() || req.body.title.trim().length > 120)) {
+      return res.status(400).json({ message: "Enter a title of 1 to 120 characters." });
+    }
+    if (req.body.description !== undefined && (typeof req.body.description !== "string" || !req.body.description.trim() || req.body.description.trim().length > 1000)) {
+      return res.status(400).json({ message: "Enter a description of 1 to 1,000 characters." });
+    }
+    if (req.body.price !== undefined && (
+      !["string", "number"].includes(typeof req.body.price) ||
+      String(req.body.price).trim() === "" ||
+      !Number.isFinite(Number(req.body.price)) ||
+      Number(req.body.price) < 0
+    )) {
+      return res.status(400).json({ message: "Enter a valid price of zero or more." });
+    }
+    if (req.body.stock !== undefined && (
+      !["string", "number"].includes(typeof req.body.stock) ||
+      String(req.body.stock).trim() === "" ||
+      !Number.isInteger(Number(req.body.stock)) ||
+      Number(req.body.stock) < 0
+    )) {
+      return res.status(400).json({ message: "Stock must be a whole number of zero or more." });
+    }
+    if (req.body.category !== undefined && !listingCategories.includes(req.body.category)) {
+      return res.status(400).json({ message: "Choose a valid product category." });
+    }
+    if (req.body.condition !== undefined && !listingConditions.includes(req.body.condition)) {
+      return res.status(400).json({ message: "Choose a valid product condition." });
+    }
+    if (req.body.status !== undefined) {
+      if (!["active", "hidden"].includes(req.body.status) || listing.status === "sold") {
+        return res.status(400).json({ message: "This listing status can't be changed." });
+      }
+    }
+
+    const files = req.files || [];
+    if (files.some((file) =>
+      !Buffer.isBuffer(file.buffer) ||
+      !["image/jpeg", "image/png", "image/gif", "image/webp"].includes(file.mimetype) ||
+      !isImageBuffer(file.buffer),
+    )) {
+      return res.status(400).json({ message: "Choose valid JPG, PNG, GIF, or WebP image files." });
+    }
+    if (files.length > 0 && !isCloudinaryConfigured()) {
+      return res.status(503).json({ message: "Marketplace image storage is not configured. Please contact support." });
+    }
+
+    const requestedImages = req.body.images === undefined
+      ? [...listing.images]
+      : normalizeImageUrls(req.body.images);
+    if (requestedImages === null) {
+      return res.status(400).json({ message: "Listing image URLs must be valid HTTP or HTTPS URLs." });
+    }
+    if (requestedImages.length + files.length > 4) {
+      return res.status(400).json({ message: "A listing can have no more than four photos." });
+    }
+
+    try {
+      for (const file of files) uploadedAssets.push(await uploadMedia(file));
+    } catch (error) {
+      await removeUploadedMedia(uploadedAssets);
+      uploadedAssets.length = 0;
+      console.error("Marketplace image update failed:", error.message);
+      return res.status(502).json({ message: "We couldn't upload your listing photos. Please try again." });
+    }
+
     const allowedFields = [
       "title",
       "description",
@@ -313,20 +426,18 @@ export const updateListing = async (req, res) => {
       "status",
     ];
 
-    if (req.body.images !== undefined) {
-      const normalizedImages = normalizeImageUrls(req.body.images);
-      if (normalizedImages === null) {
-        return res.status(400).json({
-          message: "Listing image URLs must be valid HTTP or HTTPS URLs",
-        });
-      }
-
-      listing.images = normalizedImages;
-    }
+    listing.images = [
+      ...requestedImages,
+      ...uploadedAssets.map((asset) => asset.secureUrl),
+    ];
 
     allowedFields.forEach((field) => {
       if (field !== "images" && req.body[field] !== undefined) {
-        listing[field] = req.body[field];
+        listing[field] = field === "title" || field === "description"
+          ? req.body[field].trim()
+          : field === "price" || field === "stock"
+            ? Number(req.body[field])
+            : req.body[field];
       }
     });
 
@@ -337,9 +448,10 @@ export const updateListing = async (req, res) => {
       listing,
     });
   } catch (error) {
+    await removeUploadedMedia(uploadedAssets);
+    console.error("Update marketplace listing failed:", error.message);
     res.status(500).json({
       message: "Failed to update listing",
-      error: error.message,
     });
   }
 };
@@ -360,15 +472,20 @@ export const deleteListing = async (req, res) => {
       });
     }
 
-    await listing.deleteOne();
+    if (listing.status === "sold") {
+      return res.status(400).json({ message: "Sold listings can't be taken down." });
+    }
+    listing.status = "hidden";
+    await listing.save();
 
     res.json({
-      message: "Listing deleted successfully",
+      message: "Listing taken down. You can restore it from your seller dashboard.",
+      listing,
     });
   } catch (error) {
+    console.error("Take down marketplace listing failed:", error.message);
     res.status(500).json({
-      message: "Failed to delete listing",
-      error: error.message,
+      message: "We couldn't take down this listing. Please try again.",
     });
   }
 };

@@ -8,6 +8,7 @@ import {
   MessagingError,
   persistDirectMessage,
 } from "../services/directMessageService.js";
+import { safelyCreateNotification } from "../services/notificationService.js";
 
 const getMessagingBlock = (firstUserId, secondUserId) =>
   VibeCheckInteraction.exists({
@@ -396,6 +397,17 @@ export const sendDirectMessage = async (req, res) => {
     });
 
     const io = req.app.get("io");
+    await safelyCreateNotification({
+      io,
+      recipient: receiverId,
+      actor: req.user._id,
+      type: "direct_message",
+      title: `${req.user.name} sent you a message`,
+      message: "Open the conversation to read it.",
+      targetType: "conversation",
+      targetId: conversation._id,
+      sourceId: populatedMessage._id,
+    });
     if (io) {
       const payload = { conversationId, message: populatedMessage };
       io.to(`conversation:${conversationId}`).emit("dm:new", payload);

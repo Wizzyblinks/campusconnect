@@ -4,6 +4,7 @@ import {
   MessagingError,
   persistDirectMessage,
 } from "./directMessageService.js";
+import { safelyCreateNotification } from "./notificationService.js";
 
 const emitError = (socket, acknowledge, error) => {
   const payload = {
@@ -56,6 +57,17 @@ const directMessageSocketService = (io, socket) => {
         receiverId,
         content: message,
         clientMessageId,
+      });
+      await safelyCreateNotification({
+        io,
+        recipient: receiverId,
+        actor: userId,
+        type: "direct_message",
+        title: `${socket.user.name} sent you a message`,
+        message: "Open the conversation to read it.",
+        targetType: "conversation",
+        targetId: conversation._id,
+        sourceId: savedMessage._id,
       });
       const event = {
         conversationId: conversation._id.toString(),

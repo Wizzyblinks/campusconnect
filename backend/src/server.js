@@ -82,6 +82,14 @@ io.use(async (socket, next) => {
       return next(new Error("User not found"));
     }
 
+    if ((user.tokenVersion || 0) !== (decoded.tokenVersion ?? 0)) {
+      return next(new Error("Session expired. Please log in again."));
+    }
+
+    if (user.emailVerified === false) {
+      return next(new Error("Email verification is required"));
+    }
+
     if (user.isRestricted) {
       return next(new Error("Your account is restricted"));
     }

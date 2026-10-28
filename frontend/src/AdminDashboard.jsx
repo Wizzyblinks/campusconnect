@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   Activity,
   Newspaper,
+  ShoppingBag,
   ShieldAlert,
   Store,
   Users,
@@ -16,6 +17,7 @@ const sections = [
   { id: "Campus Services", icon: Store },
   { id: "Campus News", icon: Newspaper },
   { id: "Reports", icon: ShieldAlert },
+  { id: "Disputes", icon: ShoppingBag },
 ];
 
 const emptyNewsForm = {
@@ -43,6 +45,8 @@ function AdminDashboard() {
   const [editingNewsId, setEditingNewsId] = useState("");
   const [reports, setReports] = useState([]);
   const [vibeReports, setVibeReports] = useState([]);
+  const [postReports, setPostReports] = useState([]);
+  const [disputes, setDisputes] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -60,6 +64,20 @@ function AdminDashboard() {
       setError(requestError.message || "Administrator access is required.");
     } finally {
       setCheckingAccess(false);
+    }
+
+  }, []);
+
+  const loadDisputes = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const data = await apiRequest("/api/admin/disputes");
+      setDisputes(data.disputes || []);
+    } catch (requestError) {
+      setError(requestError.message || "Could not load marketplace disputes.");
+    } finally {
+      setLoading(false);
     }
   }, []);
 
@@ -99,12 +117,14 @@ function AdminDashboard() {
     setLoading(true);
     setError("");
     try {
-      const [messagingData, vibeData] = await Promise.all([
+      const [messagingData, vibeData, postData] = await Promise.all([
         apiRequest("/api/admin/reports/messages"),
         apiRequest("/api/matching/admin/reports"),
+        apiRequest("/api/admin/reports/posts"),
       ]);
       setReports(messagingData.reports || []);
       setVibeReports(vibeData.reports || []);
+      setPostReports(postData.reports || []);
     } catch (requestError) {
       setError(requestError.message || "Could not load moderation reports.");
     } finally {
@@ -121,7 +141,8 @@ function AdminDashboard() {
     if (section === "Users") loadUsers();
     if (section === "Campus News") loadNews();
     if (section === "Reports") loadReports();
-  }, [authorized, section, loadNews, loadReports, loadUsers]);
+    if (section === "Disputes") loadDisputes();
+  }, [authorized, section, loadNews, loadReports, loadUsers, loadDisputes]);
 
   useEffect(() => {
     setUserPage(1);
@@ -225,6 +246,21 @@ function AdminDashboard() {
       await loadReports();
     } catch (requestError) {
       setError(requestError.message || "Could not review VibeCheck report.");
+    }
+  }
+
+  async function reviewPostReport(reportId, status) {
+    setError("");
+    setNotice("");
+    try {
+      const data = await apiRequest(`/api/admin/reports/posts/${reportId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ status }),
+      });
+      setNotice(data.message || "Post report review saved.");
+      await loadReports();
+    } catch (requestError) {
+      setError(requestError.message || "Could not review this post report.");
     }
   }
 
@@ -334,6 +370,10 @@ function AdminDashboard() {
                   ["Verified students", overview.counts.verifiedStudents],
                   ["Online users", overview.counts.onlineUsers],
                   ["Offline users", overview.counts.offlineUsers],
+                  ["Active posts", overview.counts.totalPosts],
+                  ["Active listings", overview.counts.activeListings],
+                  ["Orders", overview.counts.totalOrders],
+                  ["Open disputes", overview.counts.openDisputes],
                 ].map(([label, value]) => (
                   <article key={label} className="rounded-2xl border border-slate-200 bg-white p-5">
                     <p className="text-sm font-semibold text-slate-500">{label}</p>
@@ -403,6 +443,31 @@ function AdminDashboard() {
 
       {section === "Campus Services" && <CampusServicesAdmin />}
 
+      {section === "Disputes" && (
+        <div className="rounded-2xl border border-slate-200 bg-white p-5">
+          <div className="flex items-center justify-between gap-3">
+            <div><h4 className="text-lg font-extrabold">Marketplace disputes</h4><p className="mt-1 text-sm text-slate-500">Dispute and payment status for orders involving your campus.</p></div>
+            <button type="button" onClick={loadDisputes} className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold">Refresh</button>
+          </div>
+          {loading ? <p className="py-8 text-center text-sm text-slate-500">Loading disputes...</p> : disputes.length === 0 ? <p className="py-8 text-center text-sm text-slate-500">No marketplace disputes.</p> : (
+            <div className="mt-3 divide-y divide-slate-100">
+              {disputes.map((dispute) => (
+                <article key={dispute._id} className="py-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="font-bold">{dispute.reason}</p>
+                    <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-bold text-amber-800">{dispute.status}</span>
+                  </div>
+                  <p className="mt-2 whitespace-pre-wrap text-sm text-slate-600">{dispute.description}</p>
+                  <p className="mt-2 text-xs text-slate-500">Buyer: {dispute.buyer?.name || "Student"} · Seller: {dispute.seller?.name || "Student"} · {dateLabel(dispute.createdAt)}</p>
+                  {dispute.order && <p className="mt-1 text-xs text-slate-500">Order {dispute.order._id} · {dispute.order.status} · Payment {dispute.order.paymentStatus} · ₦{Number(dispute.order.totalAmount || 0).toLocaleString()}</p>}
+                  {dispute.resolutionNote && <p className="mt-2 text-xs text-slate-600">Resolution note: {dispute.resolutionNote}</p>}
+                </article>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {section === "Campus News" && (
         <div className="space-y-5">
           <form onSubmit={saveNews} className="space-y-4 rounded-2xl border border-slate-200 bg-white p-5">
@@ -447,11 +512,26 @@ function AdminDashboard() {
       {section === "Reports" && (
         <div className="space-y-5">
           <div className="flex items-center justify-between gap-3">
-            <div><h4 className="text-lg font-extrabold">Reports and moderation</h4><p className="mt-1 text-sm text-slate-500">Only implemented messaging and VibeCheck reports are listed.</p></div>
+            <div><h4 className="text-lg font-extrabold">Reports and moderation</h4><p className="mt-1 text-sm text-slate-500">Review messaging, post, and VibeCheck reports for your campus.</p></div>
             <button type="button" onClick={loadReports} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold">Refresh</button>
           </div>
           {loading ? <p className="rounded-xl bg-white p-6 text-center text-sm text-slate-500">Loading reports...</p> : (
             <>
+              <div className="rounded-2xl border border-slate-200 bg-white p-5">
+                <h5 className="font-extrabold">Post reports ({postReports.length})</h5>
+                {postReports.length === 0 ? <p className="py-5 text-sm text-slate-500">No open post reports.</p> : postReports.map((report) => (
+                  <article key={report._id} className="mt-4 rounded-xl border border-slate-100 p-4">
+                    <p className="font-bold">{report.reason} · {report.post?.author?.name || "Student post"}</p>
+                    <p className="mt-1 whitespace-pre-wrap text-sm text-slate-700">{report.post?.text || "Post with media"}</p>
+                    {report.details && <p className="mt-2 text-sm text-slate-600">{report.details}</p>}
+                    <p className="mt-2 text-xs text-slate-500">Reported by {report.reporter?.name || "student"} · {dateLabel(report.createdAt)}</p>
+                    <div className="mt-3 flex gap-2">
+                      <button type="button" onClick={() => reviewPostReport(report._id, "REVIEWED")} className="rounded-lg bg-blue-700 px-3 py-2 text-xs font-bold text-white">Mark reviewed</button>
+                      <button type="button" onClick={() => reviewPostReport(report._id, "DISMISSED")} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold">Dismiss</button>
+                    </div>
+                  </article>
+                ))}
+              </div>
               <div className="rounded-2xl border border-slate-200 bg-white p-5">
                 <h5 className="font-extrabold">Messaging reports ({reports.length})</h5>
                 {reports.length === 0 ? <p className="py-5 text-sm text-slate-500">No reported conversations.</p> : reports.map((report) => (

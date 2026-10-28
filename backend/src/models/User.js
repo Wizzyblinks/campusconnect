@@ -67,6 +67,20 @@ const userSchema = new mongoose.Schema(
       },
     },
 
+    privacy: {
+      discoverable: { type: Boolean, default: true },
+      profileVisibility: {
+        type: String,
+        enum: ["public", "campus", "private"],
+        default: "campus",
+      },
+      defaultPostVisibility: {
+        type: String,
+        enum: ["public", "campus", "private"],
+        default: "campus",
+      },
+    },
+
     vibeCheck: {
       enabled: {
         type: Boolean,
@@ -80,6 +94,21 @@ const userSchema = new mongoose.Schema(
         type: [{ type: String, trim: true, maxlength: 32 }],
         default: [],
       },
+    },
+
+    emailVerified: {
+      type: Boolean,
+      default: true,
+    },
+
+    emailVerifiedAt: {
+      type: Date,
+      default: null,
+    },
+
+    tokenVersion: {
+      type: Number,
+      default: 0,
     },
 
     isVerifiedStudent: {

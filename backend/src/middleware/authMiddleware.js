@@ -12,14 +12,26 @@ const protect = async (req, res, next) => {
     }
 
     const token = authHeader.split(" ")[1];
-
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-
     const user = await User.findById(decoded.id).select("-password");
 
     if (!user) {
       return res.status(401).json({
         message: "User not found",
+      });
+    }
+
+    const tokenVersion = decoded.tokenVersion ?? 0;
+
+    if ((user.tokenVersion || 0) !== tokenVersion) {
+      return res.status(401).json({
+        message: "Session expired. Please log in again.",
+      });
+    }
+
+    if (user.emailVerified === false) {
+      return res.status(403).json({
+        message: "Email verification is required before accessing this account.",
       });
     }
 

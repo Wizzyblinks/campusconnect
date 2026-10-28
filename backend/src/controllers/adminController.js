@@ -1,5 +1,10 @@
 import mongoose from "mongoose";
 import Conversation from "../models/Conversation.js";
+import Dispute from "../models/Dispute.js";
+import MarketplaceListing from "../models/MarketplaceListing.js";
+import Order from "../models/Order.js";
+import Post from "../models/Post.js";
+import PostReport from "../models/PostReport.js";
 import User from "../models/User.js";
 
 const adminScope = (user) => ({
@@ -15,10 +20,18 @@ const isInAdminScope = (user, admin) =>
 export const getAdminOverview = async (req, res) => {
   try {
     const scope = adminScope(req.user);
-    const [totalUsers, verifiedStudents, onlineUsers] = await Promise.all([
+    const campusUserIds = await User.distinct("_id", scope);
+    const [totalUsers, verifiedStudents, onlineUsers, totalPosts, activeListings, totalOrders, openDisputes] = await Promise.all([
       User.countDocuments(scope),
       User.countDocuments({ ...scope, isVerifiedStudent: true }),
       User.countDocuments({ ...scope, isOnline: true }),
+      Post.countDocuments({ ...scope, isDeleted: { $ne: true } }),
+      MarketplaceListing.countDocuments({ ...scope, status: "active", stock: { $gt: 0 } }),
+      Order.countDocuments({ $or: [{ buyer: { $in: campusUserIds } }, { seller: { $in: campusUserIds } }] }),
+      Dispute.countDocuments({
+        $or: [{ buyer: { $in: campusUserIds } }, { seller: { $in: campusUserIds } }],
+        status: { $in: ["OPEN", "UNDER_REVIEW"] },
+      }),
     ]);
     return res.json({
       scope: "Your campus",
@@ -27,6 +40,10 @@ export const getAdminOverview = async (req, res) => {
         verifiedStudents,
         onlineUsers,
         offlineUsers: Math.max(0, totalUsers - onlineUsers),
+        totalPosts,
+        activeListings,
+        totalOrders,
+        openDisputes,
       },
     });
   } catch (error) {
@@ -240,5 +257,75 @@ export const reviewMessageReport = async (req, res) => {
   } catch (error) {
     console.error("Admin messaging report review error:", error.message);
     return res.status(500).json({ message: "Failed to review messaging report" });
+  }
+};
+
+export const getPostReports = async (req, res) => {
+  try {
+    const campusPosts = await Post.distinct("_id", adminScope(req.user));
+    const reports = await PostReport.find({ post: { $in: campusPosts }, status: "OPEN" })
+      .populate({
+        path: "post",
+        select: "text visibility author createdAt",
+        populate: { path: "author", select: "name" },
+      })
+      .populate("reporter", "name")
+      .sort({ createdAt: -1 })
+      .limit(200)
+      .lean();
+    return res.json({ reports });
+  } catch (error) {
+    console.error("Admin post reports error:", error.message);
+    return res.status(500).json({ message: "We couldn't load post reports right now." });
+  }
+};
+
+export const reviewPostReport = async (req, res) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id)) {
+      return res.status(400).json({ message: "That report link is invalid." });
+    }
+    const { status, note = "" } = req.body;
+    if (!["REVIEWED", "DISMISSED"].includes(status) ||
+        typeof note !== "string" || note.trim().length > 500) {
+      return res.status(400).json({ message: "Choose a valid report outcome and note." });
+    }
+    const campusPosts = await Post.distinct("_id", adminScope(req.user));
+    const report = await PostReport.findOneAndUpdate(
+      { _id: req.params.id, post: { $in: campusPosts }, status: "OPEN" },
+      {
+        $set: {
+          status,
+          moderationNote: note.trim(),
+          reviewedBy: req.user._id,
+          reviewedAt: new Date(),
+        },
+      },
+      { new: true, runValidators: true },
+    ).populate("reviewedBy", "name");
+    if (!report) return res.status(404).json({ message: "Open post report not found." });
+    return res.json({ message: "Post report review saved.", report });
+  } catch (error) {
+    console.error("Admin post report review error:", error.message);
+    return res.status(500).json({ message: "We couldn't save that report review." });
+  }
+};
+
+export const getAdminDisputes = async (req, res) => {
+  try {
+    const campusUserIds = await User.distinct("_id", adminScope(req.user));
+    const disputes = await Dispute.find({
+      $or: [{ buyer: { $in: campusUserIds } }, { seller: { $in: campusUserIds } }],
+    })
+      .populate("order", "status paymentStatus totalAmount createdAt")
+      .populate("buyer", "name")
+      .populate("seller", "name")
+      .sort({ createdAt: -1 })
+      .limit(200)
+      .lean();
+    return res.json({ disputes });
+  } catch (error) {
+    console.error("Admin dispute list error:", error.message);
+    return res.status(500).json({ message: "We couldn't load marketplace disputes." });
   }
 };

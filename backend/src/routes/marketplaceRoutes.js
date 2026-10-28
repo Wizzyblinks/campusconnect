@@ -4,6 +4,7 @@ import multer from "multer";
 import {
   createListing,
   getMarketplaceListings,
+  getMyListings,
   getListingById,
   updateListing,
   deleteListing,
@@ -18,9 +19,11 @@ router.post("/", protect, uploadMarketplaceMedia.array("media", 4), createListin
 
 router.get("/", protect, getMarketplaceListings);
 
+router.get("/mine", protect, getMyListings);
+
 router.get("/:id", protect, getListingById);
 
-router.patch("/:id", protect, updateListing);
+router.patch("/:id", protect, uploadMarketplaceMedia.array("media", 4), updateListing);
 
 router.delete("/:id", protect, deleteListing);
 

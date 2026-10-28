@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MessageCircle, Search, Send, ShieldAlert, Check, X } from "lucide-react";
-import { apiRequest } from "./services/api.js";
+import { apiRequest, getFriendlyErrorMessage } from "./services/api.js";
+import { mergeChronologicalMessages, messageId } from "./services/messageUtils.js";
 
 const otherParticipant = (conversation, userId) =>
   conversation.participants?.find(
@@ -14,9 +15,6 @@ const formatTime = (value) =>
         minute: "2-digit",
       })
     : "";
-
-const messageId = (message) =>
-  String(message?._id || message?.clientMessageId || "");
 
 function Avatar({ name, image, online = false }) {
   return (
@@ -33,7 +31,13 @@ function Avatar({ name, image, online = false }) {
   );
 }
 
-export default function Messages({ user, socket, onUnreadCount }) {
+export default function Messages({
+  user,
+  socket,
+  onUnreadCount,
+  initialConversationId,
+  onInitialConversationHandled,
+}) {
   const [conversations, setConversations] = useState([]);
   const [activeId, setActiveId] = useState("");
   const [messages, setMessages] = useState([]);
@@ -50,6 +54,7 @@ export default function Messages({ user, socket, onUnreadCount }) {
   const [sending, setSending] = useState(false);
   const [onlineUsers, setOnlineUsers] = useState(new Set());
   const [mobileShowConversation, setMobileShowConversation] = useState(false);
+  const [socketConnected, setSocketConnected] = useState(Boolean(socket?.connected));
   const socketRef = useRef(null);
   const messageEndRef = useRef(null);
   const pendingSendRef = useRef(null);
@@ -83,16 +88,50 @@ export default function Messages({ user, socket, onUnreadCount }) {
   }, [refreshConversations]);
 
   useEffect(() => {
+    if (
+      !initialConversationId ||
+      !conversations.some(
+        (conversation) => String(conversation._id) === String(initialConversationId),
+      )
+    ) {
+      return;
+    }
+    setActiveId(String(initialConversationId));
+    setMobileShowConversation(true);
+    onInitialConversationHandled?.();
+  }, [initialConversationId, conversations, onInitialConversationHandled]);
+
+  useEffect(() => {
     socketRef.current = socket;
+    setSocketConnected(Boolean(socket?.connected));
     if (!socket) return undefined;
+
+    const onConnect = () => {
+      setSocketConnected(true);
+      if (!activeId) return;
+      socket.emit("dm:join", { conversationId: activeId }, (acknowledgement) => {
+        if (acknowledgement?.error) {
+          setMessageError(getFriendlyErrorMessage(
+            new Error(acknowledgement.error),
+            "Couldn't reconnect to this conversation.",
+          ));
+        }
+      });
+      apiRequest(`/api/messages/conversations/${activeId}/messages`)
+        .then((data) => setMessages((current) =>
+          mergeChronologicalMessages(current, Array.isArray(data.messages) ? data.messages : []),
+        ))
+        .catch((error) => setMessageError(error.message || "We couldn't refresh your messages."));
+    };
+    const onDisconnect = () => setSocketConnected(false);
+    const onConnectError = () => {
+      setSocketConnected(false);
+      setMessageError("Live messaging is reconnecting. Your messages remain saved and you can continue sending.");
+    };
 
     const onMessage = ({ conversationId, message }) => {
       if (conversationId === activeId) {
-        setMessages((current) =>
-          current.some((item) => messageId(item) === messageId(message))
-            ? current
-            : [...current, message],
-        );
+        setMessages((current) => mergeChronologicalMessages(current, [message]));
         if (String(message.receiver) === String(user._id)) {
           apiRequest(`/api/messages/conversations/${conversationId}/read`, {
             method: "PATCH",
@@ -105,7 +144,11 @@ export default function Messages({ user, socket, onUnreadCount }) {
     };
     const onRequest = () => refreshConversations();
     const onRead = () => refreshConversations();
-    const onSocketError = ({ message }) => setMessageError(message);
+    const onSocketError = ({ message }) =>
+      setMessageError(getFriendlyErrorMessage(
+        new Error(message),
+        "We couldn't complete that messaging action.",
+      ));
     const onPresence = ({ userId, isOnline }) => {
       setOnlineUsers((current) => {
         const next = new Set(current);
@@ -115,6 +158,9 @@ export default function Messages({ user, socket, onUnreadCount }) {
       });
     };
 
+    socket.on("connect", onConnect);
+    socket.on("disconnect", onDisconnect);
+    socket.on("connect_error", onConnectError);
     socket.on("dm:new", onMessage);
     socket.on("dm:preview", onMessage);
     socket.on("dm:request", onRequest);
@@ -124,6 +170,9 @@ export default function Messages({ user, socket, onUnreadCount }) {
     socket.on("presence:update", onPresence);
 
     return () => {
+      socket.off("connect", onConnect);
+      socket.off("disconnect", onDisconnect);
+      socket.off("connect_error", onConnectError);
       socket.off("dm:new", onMessage);
       socket.off("dm:preview", onMessage);
       socket.off("dm:request", onRequest);
@@ -158,13 +207,17 @@ export default function Messages({ user, socket, onUnreadCount }) {
           `/api/messages/conversations/${conversationId}/messages`,
         );
         if (!cancelled) {
-          setMessages(Array.isArray(data.messages) ? data.messages : []);
+          setMessages(mergeChronologicalMessages(Array.isArray(data.messages) ? data.messages : []));
           await refreshConversations();
-          socketRef.current?.emit("dm:join", { conversationId });
+          socketRef.current?.emit("dm:join", { conversationId }, (acknowledgement) => {
+            if (acknowledgement?.error) {
+              setMessageError(getFriendlyErrorMessage(new Error(acknowledgement.error), "Couldn't open this conversation."));
+            }
+          });
         }
       } catch (error) {
         if (!cancelled) {
-          setMessageError(error.message || "Could not load message history.");
+          setMessageError(error.message || "We couldn't load this conversation's messages.");
           setMessages([]);
         }
       } finally {
@@ -304,9 +357,7 @@ export default function Messages({ user, socket, onUnreadCount }) {
         },
       );
       setMessages((current) =>
-        current.some((item) => messageId(item) === messageId(data.data))
-          ? current
-          : [...current, data.data],
+        mergeChronologicalMessages(current, [data.data]),
       );
       setDraft("");
       pendingSendRef.current = null;
@@ -492,7 +543,9 @@ export default function Messages({ user, socket, onUnreadCount }) {
                 <div className="min-w-0 flex-1">
                   <p className="truncate font-bold">{activeOther?.name || "Student"}</p>
                   <p className="mt-0.5 text-xs text-slate-500">
-                    {activeConversation.status === "ACCEPTED"
+                    {!socketConnected
+                      ? "Live connection reconnecting · messages are saved"
+                      : activeConversation.status === "ACCEPTED"
                       ? onlineUsers.has(String(activeOther?._id))
                         ? "Online"
                         : "Conversation accepted"

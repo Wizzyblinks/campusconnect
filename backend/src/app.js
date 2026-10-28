@@ -37,6 +37,10 @@ import payoutRoutes from "./routes/payoutRoutes.js";
 import matchingRoutes from "./routes/matchingRoutes.js";
 import serviceRoutes from "./routes/serviceRoutes.js";
 import adminRoutes from "./routes/adminRoutes.js";
+import postRoutes from "./routes/postRoutes.js";
+import discoveryRoutes from "./routes/discoveryRoutes.js";
+import searchRoutes from "./routes/searchRoutes.js";
+import notificationRoutes from "./routes/notificationRoutes.js";
 
 const app = express();
 
@@ -57,6 +61,14 @@ app.use("/api/institutions", institutionRoutes);
 app.use("/api/profile", profileRoutes);
 
 app.use("/api/news", newsRoutes);
+
+app.use("/api/posts", postRoutes);
+
+app.use("/api/discovery", discoveryRoutes);
+
+app.use("/api/search", searchRoutes);
+
+app.use("/api/notifications", notificationRoutes);
 
 app.use("/api/verification", verificationRoutes);
 
