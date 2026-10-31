@@ -37,6 +37,9 @@ export default function Messages({
   onUnreadCount,
   initialConversationId,
   onInitialConversationHandled,
+  initialRecipientId,
+  onInitialRecipientHandled,
+  onProfile,
 }) {
   const [conversations, setConversations] = useState([]);
   const [activeId, setActiveId] = useState("");
@@ -58,6 +61,7 @@ export default function Messages({
   const socketRef = useRef(null);
   const messageEndRef = useRef(null);
   const pendingSendRef = useRef(null);
+  const handledRecipientRef = useRef("");
 
   const refreshConversations = useCallback(async () => {
     setLoadingConversations(true);
@@ -100,6 +104,19 @@ export default function Messages({
     setMobileShowConversation(true);
     onInitialConversationHandled?.();
   }, [initialConversationId, conversations, onInitialConversationHandled]);
+
+  useEffect(() => {
+    if (!initialRecipientId) {
+      handledRecipientRef.current = "";
+      return;
+    }
+    if (loadingConversations || handledRecipientRef.current === String(initialRecipientId)) {
+      return;
+    }
+    handledRecipientRef.current = String(initialRecipientId);
+    startConversation({ _id: String(initialRecipientId) });
+    onInitialRecipientHandled?.();
+  }, [initialRecipientId, loadingConversations, onInitialRecipientHandled, startConversation]);
 
   useEffect(() => {
     socketRef.current = socket;
@@ -272,7 +289,7 @@ export default function Messages({
     setNotice("");
   }
 
-  async function startConversation(recipient) {
+  const startConversation = useCallback(async (recipient) => {
     setMessageError("");
     setNotice("");
     try {
@@ -296,7 +313,7 @@ export default function Messages({
     } catch (error) {
       setMessageError(error.message || "Could not start the conversation.");
     }
-  }
+  }, [refreshConversations]);
 
   async function updateRequest(action) {
     if (!activeId) return;
@@ -383,7 +400,7 @@ export default function Messages({
   }, [onUnreadCount, unreadTotal]);
 
   return (
-    <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
+    <section className="min-w-0 overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
       <div className="flex flex-col border-b border-slate-200 p-5 sm:flex-row sm:items-center sm:justify-between sm:px-6">
         <div>
           <h3 className="text-xl font-extrabold">Messages</h3>
@@ -411,7 +428,7 @@ export default function Messages({
         </div>
       )}
 
-      <div className="grid min-h-[620px] lg:grid-cols-[minmax(280px,0.38fr)_minmax(0,1fr)]">
+      <div className="grid min-h-[620px] min-w-0 grid-cols-[minmax(0,1fr)] lg:grid-cols-[minmax(280px,0.38fr)_minmax(0,1fr)]">
         <aside
           className={`border-b border-slate-200 lg:border-b-0 lg:border-r ${
             mobileShowConversation ? "hidden lg:block" : ""
@@ -435,26 +452,30 @@ export default function Messages({
             {searchResults.length > 0 && (
               <div className="mt-2 max-h-56 overflow-y-auto rounded-xl border border-slate-100">
                 {searchResults.map((candidate) => (
-                  <button
+                  <div
                     key={candidate._id}
-                    type="button"
-                    onClick={() =>
-                      candidate.conversationId
-                        ? openConversation(candidate.conversationId)
-                        : startConversation(candidate)
-                    }
-                    className="flex w-full items-center gap-3 border-b border-slate-100 p-3 text-left last:border-0 hover:bg-slate-50"
+                    className="flex w-full items-center gap-2 border-b border-slate-100 p-3 last:border-0 hover:bg-slate-50"
                   >
-                    <Avatar name={candidate.name} image={candidate.profile?.avatar} online={candidate.isOnline} />
-                    <span className="min-w-0">
+                    <button type="button" onClick={() => onProfile?.(candidate)} aria-label={`Open ${candidate.name}'s profile`} className="shrink-0 rounded-full">
+                      <Avatar name={candidate.name} image={candidate.profile?.avatar} online={candidate.isOnline} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        candidate.conversationId
+                          ? openConversation(candidate.conversationId)
+                          : startConversation(candidate)
+                      }
+                      className="min-w-0 flex-1 text-left"
+                    >
                       <span className="block truncate text-sm font-bold">{candidate.name}</span>
                       <span className="block text-xs text-slate-500">
                         {candidate.conversationStatus
                           ? `${candidate.conversationStatus.toLowerCase()} conversation`
                           : "Start conversation"}
                       </span>
-                    </span>
-                  </button>
+                    </button>
+                  </div>
                 ))}
               </div>
             )}
@@ -476,20 +497,20 @@ export default function Messages({
               const participant = otherParticipant(conversation, user._id);
               const personId = String(participant?._id || participant || "");
               return (
-                <button
+                <div
                   key={conversation._id}
-                  type="button"
-                  onClick={() => openConversation(conversation._id)}
                   className={`flex w-full items-center gap-3 border-b border-slate-100 p-4 text-left transition hover:bg-slate-50 ${
                     activeId === conversation._id ? "bg-blue-50" : ""
                   }`}
                 >
-                  <Avatar
-                    name={participant?.name}
-                    image={participant?.profile?.avatar}
-                    online={onlineUsers.has(personId)}
-                  />
-                  <span className="min-w-0 flex-1">
+                  <button type="button" onClick={() => onProfile?.(participant)} aria-label={`Open ${participant?.name || "student"}'s profile`} className="shrink-0 rounded-full">
+                    <Avatar
+                      name={participant?.name}
+                      image={participant?.profile?.avatar}
+                      online={onlineUsers.has(personId)}
+                    />
+                  </button>
+                  <button type="button" onClick={() => openConversation(conversation._id)} className="min-w-0 flex-1 text-left">
                     <span className="flex items-center justify-between gap-2">
                       <span className="truncate text-sm font-bold">
                         {participant?.name || "Student"}
@@ -507,13 +528,13 @@ export default function Messages({
                           ? "Reported conversation"
                           : conversation.lastMessage?.message || "No messages yet"}
                     </span>
-                  </span>
+                  </button>
                   {conversation.unreadCount > 0 && (
                     <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-blue-700 px-1 text-[10px] font-bold text-white">
                       {conversation.unreadCount}
                     </span>
                   )}
-                </button>
+                </div>
               );
             })}
           </div>
@@ -535,13 +556,15 @@ export default function Messages({
                 >
                   <X size={18} />
                 </button>
-                <Avatar
-                  name={activeOther?.name}
-                  image={activeOther?.profile?.avatar}
-                  online={onlineUsers.has(String(activeOther?._id))}
-                />
+                <button type="button" onClick={() => onProfile?.(activeOther)} aria-label={`Open ${activeOther?.name || "student"}'s profile`} className="shrink-0 rounded-full">
+                  <Avatar
+                    name={activeOther?.name}
+                    image={activeOther?.profile?.avatar}
+                    online={onlineUsers.has(String(activeOther?._id))}
+                  />
+                </button>
                 <div className="min-w-0 flex-1">
-                  <p className="truncate font-bold">{activeOther?.name || "Student"}</p>
+                  <button type="button" onClick={() => onProfile?.(activeOther)} className="max-w-full truncate text-left font-bold hover:text-blue-700 hover:underline">{activeOther?.name || "Student"}</button>
                   <p className="mt-0.5 text-xs text-slate-500">
                     {!socketConnected
                       ? "Live connection reconnecting · messages are saved"

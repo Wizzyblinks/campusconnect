@@ -41,6 +41,7 @@ import postRoutes from "./routes/postRoutes.js";
 import discoveryRoutes from "./routes/discoveryRoutes.js";
 import searchRoutes from "./routes/searchRoutes.js";
 import notificationRoutes from "./routes/notificationRoutes.js";
+import followRoutes from "./routes/followRoutes.js";
 
 const app = express();
 
@@ -69,6 +70,8 @@ app.use("/api/discovery", discoveryRoutes);
 app.use("/api/search", searchRoutes);
 
 app.use("/api/notifications", notificationRoutes);
+
+app.use("/api/follows", followRoutes);
 
 app.use("/api/verification", verificationRoutes);
 

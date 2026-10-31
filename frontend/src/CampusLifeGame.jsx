@@ -189,7 +189,6 @@ const initialPlayer = {
 export default function CampusLifeGame() {
   const [player, setPlayer] = useState(initialPlayer);
   const [selectedBuilding, setSelectedBuilding] = useState(null);
-  const [showControls, setShowControls] = useState(true);
   const [insideBuilding, setInsideBuilding] = useState(null);
   const [virtualMoney, setVirtualMoney] = useState(5000);
   const [activityMessage, setActivityMessage] = useState(

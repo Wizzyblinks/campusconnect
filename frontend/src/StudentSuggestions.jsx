@@ -86,9 +86,11 @@ export default function StudentSuggestions({ onProfile }) {
             {result.students.map((student) => (
               <article key={student.id} className="rounded-2xl border border-slate-200 bg-white p-5">
                 <div className="flex items-center gap-3">
-                  {student.avatar ? <img src={student.avatar} alt="" className="h-12 w-12 rounded-full object-cover" /> : <div className="flex h-12 w-12 items-center justify-center rounded-full bg-blue-50 font-bold text-blue-700">{student.name.slice(0, 1)}</div>}
+                  <button type="button" onClick={() => onProfile(student.id)} aria-label={`Open ${student.name}'s profile`} className="shrink-0 rounded-full focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-700">
+                    {student.avatar ? <img src={student.avatar} alt="" className="h-12 w-12 rounded-full object-cover" /> : <span className="flex h-12 w-12 items-center justify-center rounded-full bg-blue-50 font-bold text-blue-700">{student.name.slice(0, 1)}</span>}
+                  </button>
                   <div className="min-w-0">
-                    <h3 className="truncate font-bold">{student.name}{student.isVerifiedStudent && <ShieldCheck size={15} className="ml-1 inline text-blue-600" />}</h3>
+                    <button type="button" onClick={() => onProfile(student.id)} className="max-w-full truncate text-left font-bold hover:text-blue-700 hover:underline">{student.name}{student.isVerifiedStudent && <ShieldCheck size={15} className="ml-1 inline text-blue-600" />}</button>
                     <p className="truncate text-xs text-slate-500">{student.institution}{student.campus ? ` · ${student.campus}` : ""}</p>
                   </div>
                 </div>

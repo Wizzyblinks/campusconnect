@@ -1,6 +1,11 @@
 import mongoose from "mongoose";
 import Institution from "../models/Institution.js";
 import User from "../models/User.js";
+import FollowRequest from "../models/FollowRequest.js";
+import Post from "../models/Post.js";
+import VibeCheckInteraction from "../models/VibeCheckInteraction.js";
+import { accessiblePostFilter } from "../services/postAccess.js";
+import { canViewProfile } from "../services/profileVisibility.js";
 
 const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -101,19 +106,39 @@ export const getPublicProfile = async (req, res) => {
       role: "student",
       isRestricted: { $ne: true },
       emailVerified: { $ne: false },
-      "privacy.discoverable": { $ne: false },
-      $or: [
-        { "privacy.profileVisibility": "public" },
-        {
-          institution: req.user.institution,
-          campus: req.user.campus,
-          "privacy.profileVisibility": { $ne: "private" },
-        },
-        { _id: req.user._id },
-      ],
-    }).select("name institution campus profile.avatar profile.bio profile.department profile.level isVerifiedStudent");
+    }).select("name institution campus privacy profile.avatar profile.bio profile.department profile.level isVerifiedStudent");
     if (!user) return res.status(404).json({ message: "This profile isn't available." });
-    const institution = await Institution.findById(user.institution).select("name campuses").lean();
+    const blocked = await VibeCheckInteraction.exists({
+      action: "BLOCK",
+      $or: [
+        { actor: req.user._id, target: user._id },
+        { actor: user._id, target: req.user._id },
+      ],
+    });
+    if (blocked) return res.status(404).json({ message: "This profile isn't available." });
+    const viewerFollows = await FollowRequest.exists({
+      follower: req.user._id,
+      following: user._id,
+      status: "ACCEPTED",
+    });
+    if (!canViewProfile(req.user, user, Boolean(viewerFollows))) {
+      return res.status(404).json({ message: "This profile isn't available." });
+    }
+    const [institution, followState, followersCount, followingCount] =
+      await Promise.all([
+        Institution.findById(user.institution).select("name campuses").lean(),
+        FollowRequest.findOne({ follower: req.user._id, following: user._id }).select("status"),
+        FollowRequest.countDocuments({ following: user._id, status: "ACCEPTED" }),
+        FollowRequest.countDocuments({ follower: user._id, status: "ACCEPTED" }),
+      ]);
+    const posts = await Post.find({
+      ...accessiblePostFilter(req.user),
+      author: user._id,
+    })
+      .select("text media createdAt")
+      .sort({ createdAt: -1 })
+      .limit(20)
+      .lean();
     return res.json({
       profile: {
         id: user._id,
@@ -125,6 +150,11 @@ export const getPublicProfile = async (req, res) => {
         isVerifiedStudent: user.isVerifiedStudent,
         institution: institution?.name || "",
         campus: institution?.campuses.find((item) => String(item._id) === String(user.campus))?.name || "",
+        followStatus: followState?.status || "NONE",
+        isFollowing: Boolean(viewerFollows),
+        followersCount,
+        followingCount,
+        posts: posts.map((post) => ({ id: post._id, text: post.text, media: post.media, createdAt: post.createdAt })),
       },
     });
   } catch (error) {

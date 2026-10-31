@@ -1,26 +1,27 @@
 import Group from "../models/Group.js";
 import GroupMessage from "../models/GroupMessage.js";
+import { canAccessGroup, isGroupMember } from "./groupAccess.js";
+import { PUBLIC_PROFILE_FIELDS } from "./publicProfileProjection.js";
 
-const isGroupMember = async (groupId, userId) => {
+const findActiveMemberGroup = async (groupId, user) => {
   const group = await Group.findById(groupId);
 
-  if (!group) {
+  if (
+    !group ||
+    group.status !== "ACTIVE" ||
+    !canAccessGroup(group, user) ||
+    !isGroupMember(group, user._id)
+  ) {
     return null;
   }
 
-  const member = group.members.find(
-    (member) => member.user.toString() === userId.toString(),
-  );
-
-  return member ? group : null;
+  return group;
 };
 
 const groupChatService = (io, socket) => {
   socket.on("group:join", async ({ groupId }) => {
     try {
-      const userId = socket.user._id;
-
-      const group = await isGroupMember(groupId, userId);
+      const group = await findActiveMemberGroup(groupId, socket.user);
 
       if (!group) {
         return socket.emit("group:error", {
@@ -49,7 +50,7 @@ const groupChatService = (io, socket) => {
         });
       }
 
-      const group = await isGroupMember(groupId, socket.user._id);
+      const group = await findActiveMemberGroup(groupId, socket.user);
 
       if (!group) {
         return socket.emit("group:error", {
@@ -66,7 +67,7 @@ const groupChatService = (io, socket) => {
 
       const populatedMessage = await GroupMessage.findById(
         newMessage._id,
-      ).populate("sender", "name email profile.avatar");
+      ).populate("sender", PUBLIC_PROFILE_FIELDS);
 
       io.to(`group:${groupId}`).emit("group:message", {
         message: populatedMessage,

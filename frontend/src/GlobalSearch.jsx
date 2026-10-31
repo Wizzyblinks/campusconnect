@@ -11,7 +11,7 @@ const categories = [
   ["marketplace", "Marketplace"],
 ];
 
-export default function GlobalSearch({ onSelect }) {
+export default function GlobalSearch({ onSelect, onProfile }) {
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("all");
   const [results, setResults] = useState({});
@@ -114,16 +114,31 @@ export default function GlobalSearch({ onSelect }) {
           {!loading && !error && entries.length === 0 && <p className="py-7 text-center text-sm text-slate-500">No matching {category === "all" ? "results" : categories.find(([id]) => id === category)?.[1].toLowerCase()} found.</p>}
           <div className="mt-2 space-y-1">
             {entries.map(([type, item]) => (
-              <button key={`${type}-${item._id || item.id}`} type="button" onClick={() => { setOpen(false); onSelect(type, item); }} className="flex w-full items-center gap-3 rounded-xl p-3 text-left hover:bg-slate-50">
-                {type === "students" && item.avatar
-                  ? <img src={item.avatar} alt="" className="h-10 w-10 rounded-full object-cover" />
-                  : <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-blue-50 text-xs font-bold text-blue-700">{type === "students" ? item.name?.slice(0, 1) : type === "marketplace" ? "₦" : type === "news" ? "N" : type === "groups" ? "C" : "P"}</span>}
-                <span className="min-w-0">
-                  <span className="block truncate text-sm font-bold">{labelFor(type, item)}</span>
-                  <span className="block truncate text-xs text-slate-500">{sublabelFor(type, item)}</span>
-                </span>
-                <span className="ml-auto shrink-0 text-[10px] font-semibold uppercase text-slate-400">{type}</span>
-              </button>
+              <div key={`${type}-${item._id || item.id}`} className="flex items-center gap-2 rounded-xl p-2 hover:bg-slate-50">
+                <button
+                  type="button"
+                  onClick={() => { setOpen(false); onSelect(type, item); }}
+                  className="flex min-w-0 flex-1 items-center gap-3 rounded-lg p-1 text-left"
+                >
+                  {type === "students" && item.avatar
+                    ? <img src={item.avatar} alt="" className="h-10 w-10 shrink-0 rounded-full object-cover" />
+                    : <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-blue-50 text-xs font-bold text-blue-700">{type === "students" ? item.name?.slice(0, 1) : type === "marketplace" ? "₦" : type === "news" ? "N" : type === "groups" ? "C" : "P"}</span>}
+                  <span className="min-w-0">
+                    <span className="block truncate text-sm font-bold">{labelFor(type, item)}</span>
+                    <span className="block truncate text-xs text-slate-500">{sublabelFor(type, item)}</span>
+                  </span>
+                  <span className="ml-auto shrink-0 text-[10px] font-semibold uppercase text-slate-400">{type}</span>
+                </button>
+                {type === "posts" && (item.author?._id || item.author?.id) && (
+                  <button
+                    type="button"
+                    onClick={() => { setOpen(false); onProfile(item.author); }}
+                    className="shrink-0 rounded-lg px-2 py-2 text-xs font-semibold text-blue-700 hover:bg-blue-50"
+                  >
+                    Author
+                  </button>
+                )}
+              </div>
             ))}
           </div>
           {hasMore && !loading && <button type="button" onClick={() => runSearch(query, page + 1, true)} className="mt-2 w-full rounded-xl border border-slate-200 py-2.5 text-sm font-semibold text-blue-700">Load more results</button>}

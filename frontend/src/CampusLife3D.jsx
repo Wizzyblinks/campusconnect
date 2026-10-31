@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Canvas, useFrame } from "@react-three/fiber";
-import { Html, Sky, Text } from "@react-three/drei";
+import { Sky, Text } from "@react-three/drei";
 import * as THREE from "three";
 
 const CAMPUS_BUILDINGS = [
@@ -686,13 +686,6 @@ export default function CampusLife3D() {
     "Welcome to Ritman University! Explore the campus.",
   );
 
-  const [mobileDirection, setMobileDirection] = useState({
-    forward: false,
-    backward: false,
-    left: false,
-    right: false,
-  });
-
   const handleKeyDown = useCallback((event) => {
     const key = event.key.toLowerCase();
 
@@ -729,6 +722,12 @@ export default function CampusLife3D() {
 
     if (keyMap[key]) {
       keysRef.current[keyMap[key]] = false;
+    }
+  }, []);
+
+  const moveMobile = useCallback((direction, active) => {
+    if (direction === "forward" || direction === "backward" || direction === "left" || direction === "right") {
+      keysRef.current[direction] = active;
     }
   }, []);
 
@@ -861,8 +860,8 @@ export default function CampusLife3D() {
     <div className="relative w-full overflow-hidden rounded-2xl border border-slate-200 bg-sky-100 shadow-lg">
       {/* Game header */}
       <div className="absolute left-0 right-0 top-0 z-10 flex items-start justify-between gap-3 p-3 sm:p-4">
-        <div className="rounded-xl bg-slate-950/80 px-3 py-2 text-white shadow-lg">
-          <p className="text-sm font-extrabold sm:text-base">
+        <div className="min-w-0 max-w-[48%] rounded-xl bg-slate-950/80 px-3 py-2 text-white shadow-lg">
+          <p className="break-words text-sm font-extrabold sm:text-base">
             Ritman University 3D
           </p>
           <p className="mt-1 text-xs text-slate-200">
@@ -870,7 +869,7 @@ export default function CampusLife3D() {
           </p>
         </div>
 
-        <div className="max-w-[55%] rounded-xl bg-white/90 px-3 py-2 text-xs font-medium text-slate-700 shadow-lg sm:text-sm">
+        <div className="min-w-0 flex-1 rounded-xl bg-white/90 px-3 py-2 text-xs font-medium text-slate-700 shadow-lg sm:text-sm">
           {message}
         </div>
       </div>

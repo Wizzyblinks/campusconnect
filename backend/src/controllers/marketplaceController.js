@@ -1,5 +1,6 @@
 import MarketplaceListing from "../models/MarketplaceListing.js";
 import cloudinary, { isCloudinaryConfigured } from "../config/cloudinary.js";
+import { PUBLIC_PROFILE_FIELDS } from "../services/publicProfileProjection.js";
 
 const listingCategories = [
   "electronics",
@@ -266,7 +267,8 @@ export const getMarketplaceListings = async (req, res) => {
     }
 
     const listings = await MarketplaceListing.find(filter)
-      .populate("seller", "name email profile.avatar")
+      .select("title description price category images condition stock seller createdAt")
+      .populate("seller", PUBLIC_PROFILE_FIELDS)
       .sort({ createdAt: -1 });
 
     res.json({
@@ -295,9 +297,11 @@ export const getMyListings = async (req, res) => {
 
 export const getListingById = async (req, res) => {
   try {
-    const listing = await MarketplaceListing.findById(req.params.id).populate(
+    const listing = await MarketplaceListing.findById(req.params.id)
+      .select("title description price category images condition stock seller status views createdAt updatedAt")
+      .populate(
       "seller",
-      "name email profile.avatar",
+      PUBLIC_PROFILE_FIELDS,
     );
 
     if (!listing) {

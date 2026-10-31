@@ -1,18 +1,69 @@
 import nodemailer from "nodemailer";
 
-const getTransporter = () => {
-  const { EMAIL_USER, EMAIL_APP_PASSWORD, EMAIL_FROM } = process.env;
+const getEmailConfig = () => {
+  const smtpHost = process.env.SMTP_HOST || process.env.EMAIL_HOST;
+  const smtpPort = Number(process.env.SMTP_PORT || process.env.EMAIL_PORT || 465);
+  const secure =
+    process.env.SMTP_SECURE !== undefined
+      ? String(process.env.SMTP_SECURE).toLowerCase() === "true"
+      : smtpPort === 465;
+  const smtpUser = process.env.SMTP_USER || process.env.EMAIL_USER;
+  const smtpPassword = process.env.SMTP_PASS || process.env.EMAIL_APP_PASSWORD;
+  const sender = process.env.SMTP_FROM || process.env.EMAIL_FROM || smtpUser;
 
-  if (!EMAIL_USER || !EMAIL_APP_PASSWORD) {
-    throw new Error("Email delivery is not configured");
+  return {
+    host: smtpHost || "smtp.gmail.com",
+    port: smtpPort,
+    secure,
+    user: smtpUser,
+    pass: smtpPassword,
+    from: sender,
+  };
+};
+
+const getTransporter = () => {
+  const config = getEmailConfig();
+
+  if (!config.host || !Number.isInteger(config.port) || config.port < 1 || config.port > 65535) {
+    const error = new Error("Email SMTP host or port is invalid");
+    error.code = "EMAIL_CONFIG_INVALID";
+    throw error;
+  }
+
+  if (!config.user || !config.pass || !config.from) {
+    const error = new Error("Email delivery is not configured");
+    error.code = "EMAIL_CONFIG_MISSING";
+    throw error;
   }
 
   return nodemailer.createTransport({
-    service: "gmail",
+    host: config.host,
+    port: config.port,
+    secure: config.secure,
     auth: {
-      user: EMAIL_USER,
-      pass: EMAIL_APP_PASSWORD,
+      user: config.user,
+      pass: config.pass,
     },
+    connectionTimeout: 15000,
+    greetingTimeout: 10000,
+    socketTimeout: 30000,
+  });
+};
+
+export const logEmailDeliveryFailure = (purpose, error) => {
+  const safePurpose = purpose === "signup" ? "signup" : "reset";
+  const safeCode =
+    typeof error?.code === "string" && /^[A-Z0-9_-]{1,32}$/.test(error.code)
+      ? error.code
+      : "UNKNOWN";
+  const safeResponseCode = Number.isInteger(error?.responseCode)
+    ? error.responseCode
+    : undefined;
+
+  console.error("Email delivery failed", {
+    purpose: safePurpose,
+    code: safeCode,
+    ...(safeResponseCode ? { smtpResponseCode: safeResponseCode } : {}),
   });
 };
 
@@ -67,29 +118,41 @@ const buildEmailHtml = ({ purpose, otp, expiresInMinutes }) => {
 
 export const sendOtpEmail = async ({ to, otp, purpose, expiresInMinutes }) => {
   const transporter = getTransporter();
-  const from = process.env.EMAIL_FROM || process.env.EMAIL_USER;
+  const from = getEmailConfig().from;
 
-  const result = await transporter.sendMail({
-    from,
-    to,
-    subject:
-      purpose === "signup"
-        ? "Verify your Campus Connect account"
-        : "Campus Connect password reset code",
-    text: [
-      "Campus Connect",
-      "",
-      purpose === "signup"
-        ? "Use this code to verify your email address:"
-        : "Use this code to reset your password:",
-      `Code: ${otp}`,
-      `This code expires in ${expiresInMinutes} minutes.`,
-      "Do not share this code with anyone.",
-      "",
-      "If you did not request this email, ignore it.",
-    ].join("\n"),
-    html: buildEmailHtml({ purpose, otp, expiresInMinutes }),
-  });
+  if (!to || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(to))) {
+    const error = new Error("A valid recipient email is required.");
+    error.code = "EMAIL_INVALID_RECIPIENT";
+    throw error;
+  }
+
+  let result;
+  try {
+    result = await transporter.sendMail({
+      from,
+      to,
+      subject:
+        purpose === "signup"
+          ? "Verify your Campus Connect account"
+          : "Campus Connect password reset code",
+      text: [
+        "Campus Connect",
+        "",
+        purpose === "signup"
+          ? "Use this code to verify your email address:"
+          : "Use this code to reset your password:",
+        `Code: ${otp}`,
+        `This code expires in ${expiresInMinutes} minutes.`,
+        "Do not share this code with anyone.",
+        "",
+        "If you did not request this email, ignore it.",
+      ].join("\n"),
+      html: buildEmailHtml({ purpose, otp, expiresInMinutes }),
+    });
+  } catch (error) {
+    logEmailDeliveryFailure(purpose, error);
+    throw error;
+  }
 
   const acceptedAddresses = Array.isArray(result.accepted)
     ? result.accepted.map((address) =>
@@ -107,6 +170,8 @@ export const sendOtpEmail = async ({ to, otp, purpose, expiresInMinutes }) => {
   ) {
     const error = new Error("SMTP did not accept the OTP recipient.");
     error.code = "EMAIL_RECIPIENT_NOT_ACCEPTED";
+    error.responseCode = result?.responseCode ?? undefined;
+    logEmailDeliveryFailure(purpose, error);
     throw error;
   }
 

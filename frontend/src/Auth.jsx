@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { LogIn, UserPlus, School, ArrowLeft } from "lucide-react";
+import { LogIn, UserPlus, School, ArrowLeft, Eye, EyeOff } from "lucide-react";
 import { apiRequest } from "./services/api.js";
 import campusConnectLogo from "./assets/cclogo.jpeg";
 
@@ -18,6 +18,7 @@ function Auth({ onLogin }) {
   const [institutions, setInstitutions] = useState([]);
   const [loadingInstitutions, setLoadingInstitutions] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [showLoginPassword, setShowLoginPassword] = useState(false);
   const [error, setError] = useState("");
   const [verificationEmail, setVerificationEmail] = useState("");
   const [resetEmail, setResetEmail] = useState("");
@@ -681,17 +682,28 @@ function Auth({ onLogin }) {
                 Password
               </label>
 
-              <input
-                type="password"
-                name="password"
-                value={form.password}
-                onChange={handleChange}
-                placeholder="Enter your password"
-                autoComplete="current-password"
-                minLength={6}
-                required
-                className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100"
-              />
+              <div className="relative">
+                <input
+                  type={showLoginPassword ? "text" : "password"}
+                  name="password"
+                  value={form.password}
+                  onChange={handleChange}
+                  placeholder="Enter your password"
+                  autoComplete="current-password"
+                  minLength={6}
+                  required
+                  className="w-full rounded-xl border border-slate-200 px-4 py-3 pr-12 text-sm outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowLoginPassword((visible) => !visible)}
+                  aria-label={showLoginPassword ? "Hide password" : "Show password"}
+                  aria-pressed={showLoginPassword}
+                  className="absolute inset-y-0 right-2 inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-700"
+                >
+                  {showLoginPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
             </div>
 
             {error && (

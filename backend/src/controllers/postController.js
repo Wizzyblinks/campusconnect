@@ -268,7 +268,7 @@ export const deletePost = async (req, res) => {
     const post = await Post.findOneAndUpdate(
       { _id: req.params.id, author: req.user._id, isDeleted: false },
       { $set: { isDeleted: true, text: "", hashtags: [] } },
-      { new: true },
+      { returnDocument: "after" },
     );
     if (!post) return res.status(404).json({ message: "Post not found or you don't have permission to delete it." });
     return res.json({ message: "Your post has been deleted." });
@@ -423,7 +423,7 @@ export const updatePostComment = async (req, res) => {
     const comment = await PostComment.findOneAndUpdate(
       { _id: existing._id, author: req.user._id, isDeleted: false },
       { $set: { text } },
-      { new: true, runValidators: true },
+      { returnDocument: "after", runValidators: true },
     ).populate("author", "name profile.avatar");
     if (!comment) return res.status(404).json({ message: "Comment not found or you don't have permission to edit it." });
     return res.json({ comment });

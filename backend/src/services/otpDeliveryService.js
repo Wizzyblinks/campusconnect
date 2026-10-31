@@ -37,7 +37,7 @@ export const issueOtp = async ({
       usedAt: null,
       lastSentAt: new Date(),
     },
-    { upsert: true, new: true, setDefaultsOnInsert: true },
+    { upsert: true, returnDocument: "after", setDefaultsOnInsert: true },
   );
 
   try {

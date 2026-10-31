@@ -14,6 +14,7 @@ import AdminDashboard from "./AdminDashboard.jsx";
 import PostComposer from "./PostComposer.jsx";
 import GlobalSearch from "./GlobalSearch.jsx";
 import StudentSuggestions from "./StudentSuggestions.jsx";
+import { getThemePreference, persistThemePreference } from "./services/themePreference.js";
 import campusConnectLogo from "./assets/cclogo.jpeg";
 import {
   Home,
@@ -46,6 +47,7 @@ import {
 const navigation = [
   { name: "Home Feed", icon: Home },
   { name: "Marketplace", icon: ShoppingBag },
+  { name: "Seller Dashboard", icon: Store, sellerOnly: true },
   { name: "Study Centre", icon: BookOpen },
   { name: "Campus News", icon: Newspaper },
   { name: "Messages", icon: MessageCircle },
@@ -108,6 +110,7 @@ const normalizePost = (post, institutionLabel = "Campus Connect Student") => {
 
 function App() {
   const [user, setUser] = useState(getSavedUser);
+  const [theme, setTheme] = useState(getThemePreference);
   const [activePage, setActivePage] = useState("Home Feed");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [posts, setPosts] = useState([]);
@@ -122,6 +125,12 @@ function App() {
   const [passwordForm, setPasswordForm] = useState({ currentPassword: "", newPassword: "" });
   const [passwordSaving, setPasswordSaving] = useState(false);
   const [selectedSearchResult, setSelectedSearchResult] = useState(null);
+  const [profileMessageRecipientId, setProfileMessageRecipientId] = useState("");
+  const [profileReturnPage, setProfileReturnPage] = useState("");
+  const [followListDialog, setFollowListDialog] = useState(null);
+  const [followRequests, setFollowRequests] = useState({ incoming: [], outgoing: [] });
+  const [followRequestsError, setFollowRequestsError] = useState("");
+  const [followActionLoading, setFollowActionLoading] = useState("");
   const [trending, setTrending] = useState({ posts: [], hashtags: [] });
   const [trendingError, setTrendingError] = useState("");
   const [trendingLoading, setTrendingLoading] = useState(false);
@@ -146,18 +155,47 @@ function App() {
   const [unreadMessages, setUnreadMessages] = useState(0);
   const [messageSocket, setMessageSocket] = useState(null);
   const [notificationConversationId, setNotificationConversationId] = useState("");
-  const [campusNews, setCampusNews] = useState([]);
-  const [newsLoading, setNewsLoading] = useState(false);
-  const [newsError, setNewsError] = useState("");
 
   const [notificationsOpen, setNotificationsOpen] = useState(false);
-  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [notifications, setNotifications] = useState([]);
   const [notificationsLoading, setNotificationsLoading] = useState(false);
   const [notificationsError, setNotificationsError] = useState("");
   const [unreadNotifications, setUnreadNotifications] = useState(0);
   const [notificationsReload, setNotificationsReload] = useState(0);
   const notificationIds = useRef(new Set());
+  const profileRequestId = useRef(0);
+
+  useEffect(() => {
+    document.documentElement.classList.toggle("dark", theme === "dark");
+    persistThemePreference(theme);
+  }, [theme]);
+
+  useEffect(() => {
+    let active = true;
+    if (!user) {
+      setSellerStatus({ eligible: false, legacySeller: false, application: null });
+      setSellerListings([]);
+      return () => { active = false; };
+    }
+
+    apiRequest("/api/marketplace/seller-status")
+      .then((data) => {
+        if (!active) return;
+        const nextStatus = {
+          eligible: Boolean(data.eligible),
+          legacySeller: Boolean(data.legacySeller),
+          application: data.application || null,
+        };
+        setSellerStatus(nextStatus);
+        if (!nextStatus.eligible) setSellerListings([]);
+        setSellerStatusError("");
+      })
+      .catch((error) => {
+        if (active) setSellerStatusError(error.message || "We couldn't check seller application status.");
+      });
+
+    return () => { active = false; };
+  }, [user]);
 
   useEffect(() => {
     const token = localStorage.getItem("token");
@@ -184,8 +222,6 @@ function App() {
       setActivePage("Home Feed");
       setMobileMenuOpen(false);
       setNotificationsOpen(false);
-      setProfileMenuOpen(false);
-      setCampusNews([]);
       setPosts([]);
       setSelectedSearchResult(null);
       setNotifications([]);
@@ -255,6 +291,10 @@ function App() {
       cancelled = true;
     };
   }, [user, notificationsReload]);
+
+  useEffect(() => {
+    if (user && activePage === "Profile") loadFollowRequests();
+  }, [activePage, user]);
 
   useEffect(() => {
     if (!messageSocket) return undefined;
@@ -389,6 +429,15 @@ function App() {
   const [sellerListings, setSellerListings] = useState([]);
   const [sellerListingsLoading, setSellerListingsLoading] = useState(false);
   const [sellerListingsError, setSellerListingsError] = useState("");
+  const [sellerStatus, setSellerStatus] = useState({ eligible: false, legacySeller: false, application: null });
+  const [sellerStatusError, setSellerStatusError] = useState("");
+  const [sellerApplicationOpen, setSellerApplicationOpen] = useState(false);
+  const [sellerApplicationSaving, setSellerApplicationSaving] = useState(false);
+  const [sellerApplicationForm, setSellerApplicationForm] = useState({
+    businessName: "",
+    categories: [],
+    description: "",
+  });
   const [editingListingId, setEditingListingId] = useState("");
   const [listingActionId, setListingActionId] = useState("");
   const [ordersLoading, setOrdersLoading] = useState(false);
@@ -460,6 +509,48 @@ function App() {
     }
   }
 
+  async function loadSellerStatus() {
+      setSellerStatusError("");
+      try {
+        const data = await apiRequest("/api/marketplace/seller-status");
+        const nextStatus = {
+          eligible: Boolean(data.eligible),
+          legacySeller: Boolean(data.legacySeller),
+          application: data.application || null,
+        };
+        setSellerStatus(nextStatus);
+        if (!nextStatus.eligible) setSellerListings([]);
+        return nextStatus;
+      } catch (error) {
+        setSellerStatusError(error.message || "We couldn't check seller application status.");
+        return null;
+      }
+  }
+
+  async function submitSellerApplication(event) {
+      event.preventDefault();
+      setSellerApplicationSaving(true);
+      setMarketplaceError("");
+      try {
+        const data = await apiRequest("/api/marketplace/seller-application", {
+          method: "POST",
+          body: JSON.stringify(sellerApplicationForm),
+        });
+        setSellerStatus({
+          eligible: false,
+          legacySeller: false,
+          application: data.application,
+        });
+        setSellerApplicationOpen(false);
+        setSellerApplicationForm({ businessName: "", categories: [], description: "" });
+        setMarketplaceNotice(data.message || "Your seller application was submitted.");
+      } catch (error) {
+        setMarketplaceError(error.message || "We couldn't submit your seller application.");
+      } finally {
+        setSellerApplicationSaving(false);
+    }
+  }
+
   function resetListingForm() {
     setListingForm({
       title: "",
@@ -516,41 +607,6 @@ function App() {
       setMarketplaceSubmitting(false);
     }
   }
-
-  useEffect(() => {
-    if (!user || activePage !== "Campus News") {
-      return;
-    }
-
-    let cancelled = false;
-
-    async function loadCampusNews() {
-      setNewsLoading(true);
-      setNewsError("");
-
-      try {
-        const data = await apiRequest("/api/news/campus");
-
-        if (!cancelled) {
-          setCampusNews(Array.isArray(data.news) ? data.news : []);
-        }
-      } catch (error) {
-        if (!cancelled) {
-          setNewsError(error.message || "Failed to load campus news.");
-        }
-      } finally {
-        if (!cancelled) {
-          setNewsLoading(false);
-        }
-      }
-    }
-
-    loadCampusNews();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [activePage, user]);
 
   useEffect(() => {
     if (!user || activePage !== "Campus Match") {
@@ -661,7 +717,9 @@ function App() {
 
     loadMarketplaceListings();
     loadOrders();
-    loadSellerListings();
+    loadSellerStatus().then((status) => {
+      if (status?.eligible) loadSellerListings();
+    });
   }, [activePage, user]);
 
   async function submitListing(event) {
@@ -705,6 +763,8 @@ function App() {
       setMarketplaceNotice(editingListingId
         ? "Your listing has been updated."
         : "Your item is now listed in the marketplace.");
+      const eligibility = await loadSellerStatus();
+      if (eligibility?.eligible) await loadSellerListings();
     } catch (error) {
       setMarketplaceError(error.message || "Could not create your listing.");
     } finally {
@@ -830,11 +890,8 @@ function App() {
 
     setUser(null);
     setActivePage("Home Feed");
-    setCampusNews([]);
-    setNewsError("");
     setMobileMenuOpen(false);
     setNotificationsOpen(false);
-    setProfileMenuOpen(false);
     setPosts([]);
     setSelectedSearchResult(null);
     setNotifications([]);
@@ -1111,13 +1168,52 @@ function App() {
     }
   }
 
+  async function openUserProfile(profileReference) {
+    const requestId = ++profileRequestId.current;
+    setPostActionError("");
+    setProfileError("");
+    setProfileNotice("");
+    const targetId = profileReference?._id || profileReference?.id || profileReference;
+    if (!targetId) {
+      return;
+    }
+
+    if (String(targetId) === String(user?._id || user?.id || "")) {
+      setActivePage("Profile");
+      setSelectedSearchResult(null);
+      return;
+    }
+
+    setSelectedSearchResult(null);
+    try {
+      const data = await apiRequest(`/api/discovery/profiles/${encodeURIComponent(String(targetId))}`);
+      if (requestId === profileRequestId.current) {
+        setSelectedSearchResult({ type: "students", item: data.profile });
+      }
+    } catch (error) {
+      if (requestId === profileRequestId.current) {
+        setProfileError(error.message || "We couldn't open that profile.");
+      }
+    }
+  }
+
+  function openProfileConversation(profile) {
+    const recipientId = String(profile?.id || profile?._id || "");
+    if (!recipientId) return;
+    setProfileReturnPage(activePage === "Messages" ? "" : activePage);
+    setProfileMessageRecipientId(recipientId);
+    setSelectedSearchResult(null);
+    setActivePage("Messages");
+  }
+
   async function selectSearchResult(type, item) {
     setPostActionError("");
+    if (type === "students") {
+      await openUserProfile(item);
+      return;
+    }
     try {
-      if (type === "students") {
-        const data = await apiRequest(`/api/discovery/profiles/${item._id || item.id}`);
-        setSelectedSearchResult({ type, item: data.profile });
-      } else if (type === "posts") {
+      if (type === "posts") {
         const data = await apiRequest(`/api/posts/${item._id || item.id}`);
         const post = normalizePost(data.post, institutionName || campusName);
         setPosts((current) => current.some((existing) => existing.id === post.id)
@@ -1137,6 +1233,122 @@ function App() {
       }
     } catch (error) {
       setPostActionError(error.message || "We couldn't open that result.");
+    }
+  }
+
+  async function updateFollowAction(profile, action) {
+    const profileId = String(profile?.id || profile?._id || "");
+    if (!profileId) return;
+    setFollowActionLoading(profileId);
+    setProfileError("");
+    try {
+      const data = await apiRequest(
+        `/api/follows/${encodeURIComponent(profileId)}`,
+        {
+          method: action === "request" ? "POST" : "PATCH",
+          ...(action === "request"
+            ? {}
+            : { body: JSON.stringify({ action }) }),
+        },
+      );
+      const selectedProfileId = selectedSearchResult?.type === "students"
+        ? String(selectedSearchResult.item.id || selectedSearchResult.item._id || "")
+        : "";
+      if (selectedProfileId === profileId) {
+        try {
+          const fresh = await apiRequest(
+            `/api/discovery/profiles/${encodeURIComponent(profileId)}`,
+          );
+          setSelectedSearchResult({ type: "students", item: fresh.profile });
+        } catch {
+          setSelectedSearchResult(null);
+        }
+      }
+      if (["accept", "decline", "cancel"].includes(action)) {
+        await refreshFollowRequests();
+      }
+      setProfileNotice(data.message || "Follow details updated.");
+    } catch (error) {
+      setProfileError(error.message || "We couldn't update this follow request.");
+    } finally {
+      setFollowActionLoading("");
+    }
+  }
+
+  async function refreshFollowRequests() {
+    try {
+      const data = await apiRequest("/api/follows/requests");
+      setFollowRequests({
+        incoming: data.incoming || [],
+        outgoing: data.outgoing || [],
+      });
+      setFollowRequestsError("");
+    } catch (error) {
+      setFollowRequestsError(error.message || "We couldn't load your follow requests.");
+    }
+  }
+
+  async function loadFollowList(profileId, list) {
+    setFollowListDialog({ profileId, list, users: [], loading: true, error: "", page: 1, hasMore: false });
+    try {
+      const data = await apiRequest(
+        `/api/follows/${encodeURIComponent(profileId)}/${list}?page=1&limit=20`,
+      );
+      setFollowListDialog({
+        profileId,
+        list,
+        users: data.users || [],
+        loading: false,
+        error: "",
+        page: 1,
+        hasMore: (data.pagination?.totalPages || 1) > 1,
+      });
+    } catch (error) {
+      setFollowListDialog({
+        profileId,
+        list,
+        users: [],
+        loading: false,
+        error: error.message || "We couldn't load this list.",
+      });
+    }
+  }
+
+  async function loadMoreFollowList() {
+    if (!followListDialog || followListDialog.loading || !followListDialog.hasMore) return;
+    const page = followListDialog.page + 1;
+    setFollowListDialog((current) => ({ ...current, loading: true, error: "" }));
+    try {
+      const { profileId, list } = followListDialog;
+      const data = await apiRequest(
+        `/api/follows/${encodeURIComponent(profileId)}/${list}?page=${page}&limit=20`,
+      );
+      setFollowListDialog((current) => ({
+        ...current,
+        users: [...current.users, ...(data.users || [])],
+        loading: false,
+        page,
+        hasMore: (data.pagination?.totalPages || page) > page,
+      }));
+    } catch (error) {
+      setFollowListDialog((current) => ({
+        ...current,
+        loading: false,
+        error: error.message || "We couldn't load more students.",
+      }));
+    }
+  }
+
+  async function loadFollowRequests() {
+    setFollowRequestsError("");
+    try {
+      const data = await apiRequest("/api/follows/requests");
+      setFollowRequests({
+        incoming: Array.isArray(data.incoming) ? data.incoming : [],
+        outgoing: Array.isArray(data.outgoing) ? data.outgoing : [],
+      });
+    } catch (error) {
+      setFollowRequestsError(error.message || "We couldn't load follow requests.");
     }
   }
 
@@ -1293,6 +1505,10 @@ function App() {
       setActivePage("Messages");
       return;
     }
+    if (notification.targetType === "user") {
+      await openUserProfile(notification.actor || notification.targetId);
+      return;
+    }
     if (notification.targetType === "post") {
       setActivePage("Home Feed");
       try {
@@ -1340,6 +1556,11 @@ function App() {
   });
 
   const accountId = String(user?._id || user?.id || "");
+  const sellerDashboardEligible = Boolean(sellerStatus.eligible);
+  const selectedStudentProfile = selectedSearchResult?.type === "students"
+    ? selectedSearchResult.item
+    : null;
+  const selectedProfileFollowStatus = selectedStudentProfile?.followStatus || "NONE";
   const buyerOrders = orders.filter(
     (order) => String(order.buyer?._id || order.buyer) === accountId,
   );
@@ -1380,9 +1601,12 @@ function App() {
 
   function renderComment(comment) {
     const isOwner = String(comment.author?._id || comment.author) === String(user._id || user.id);
+    const authorId = comment.author?._id || comment.author?.id || comment.author;
     return (
       <>
-        <p className="text-xs font-bold text-slate-700">{comment.author?.name || "Student"}</p>
+        <button type="button" onClick={() => openUserProfile(authorId)} className="text-left text-xs font-bold text-slate-700 hover:text-blue-700 hover:underline">
+          {comment.author?.name || "Student"}
+        </button>
         {editingComment?._id === comment._id ? (
           <form onSubmit={(event) => saveCommentEdit(event, comment)} className="mt-2 flex gap-2">
             <input name="text" defaultValue={comment.text} maxLength={2000} autoFocus className="min-w-0 flex-1 rounded-lg border border-slate-200 px-2 py-1.5 text-sm" />
@@ -1437,7 +1661,7 @@ function App() {
           </div>
 
           <div className="hidden max-w-md flex-1 md:block">
-            <GlobalSearch onSelect={selectSearchResult} />
+            <GlobalSearch onSelect={selectSearchResult} onProfile={openUserProfile} />
           </div>
 
           <div className="flex shrink-0 items-center gap-2 sm:gap-4">
@@ -1486,7 +1710,6 @@ function App() {
               <button
                 onClick={() => {
                   setNotificationsOpen((previous) => !previous);
-                  setProfileMenuOpen(false);
                 }}
                 className="relative rounded-xl p-2.5 text-slate-600 transition hover:bg-blue-50 hover:text-blue-700"
                 aria-label="Notifications"
@@ -1541,9 +1764,8 @@ function App() {
                       </p>
                     ) : (
                       notifications.map((notification) => (
-                        <button
+                        <div
                           key={notification._id}
-                          onClick={() => openNotification(notification)}
                           className={`flex w-full gap-3 border-b border-slate-100 p-4 text-left transition hover:bg-slate-50 ${
                             !notification.readAt ? "bg-blue-50/60" : ""
                           }`}
@@ -1553,20 +1775,27 @@ function App() {
                               notification.readAt ? "bg-slate-200" : "bg-blue-600"
                             }`}
                           />
-                          <span className="min-w-0">
-                            <span className="block text-sm font-bold text-slate-800">
-                              {notification.title}
-                            </span>
-                            <span className="mt-1 block text-xs leading-5 text-slate-500">
-                              {notification.message}
-                            </span>
-                            <span className="mt-2 block text-[11px] text-slate-400">
-                              {notification.createdAt
-                                ? new Date(notification.createdAt).toLocaleString()
-                                : ""}
-                            </span>
+                          <span className="min-w-0 flex-1">
+                            <button type="button" onClick={() => openNotification(notification)} className="block w-full text-left">
+                              <span className="block text-sm font-bold text-slate-800">
+                                {notification.title}
+                              </span>
+                              <span className="mt-1 block text-xs leading-5 text-slate-500">
+                                {notification.message}
+                              </span>
+                              <span className="mt-2 block text-[11px] text-slate-400">
+                                {notification.createdAt
+                                  ? new Date(notification.createdAt).toLocaleString()
+                                  : ""}
+                              </span>
+                            </button>
+                            {notification.actor && (
+                              <button type="button" onClick={() => openUserProfile(notification.actor)} className="mt-2 text-xs font-semibold text-blue-700 hover:underline">
+                                View {notification.actor.name || "student"}'s profile
+                              </button>
+                            )}
                           </span>
-                        </button>
+                        </div>
                       ))
                     )}
                   </div>
@@ -1576,7 +1805,7 @@ function App() {
 
             <div className="hidden h-8 border-l border-slate-200 sm:block" />
 
-            <div className="flex items-center gap-2 rounded-xl p-1.5">
+            <button type="button" onClick={() => { setActivePage("Profile"); setSelectedSearchResult(null); }} className="flex items-center gap-2 rounded-xl p-1.5 text-left hover:bg-slate-50">
               <div className="flex h-9 w-9 items-center justify-center rounded-full bg-blue-100 font-bold text-blue-700">
                 {userInitials}
               </div>
@@ -1590,9 +1819,9 @@ function App() {
                   {user.role || "Student"}
                 </p>
               </div>
+            </button>
             </div>
           </div>
-        </div>
       </header>
 
       {mobileMenuOpen && (
@@ -1648,7 +1877,7 @@ function App() {
 
           <nav className="space-y-1">
             {navigation
-              .filter((item) => !item.adminOnly || user.role === "admin")
+              .filter((item) => (!item.adminOnly || user.role === "admin") && (!item.sellerOnly || sellerDashboardEligible))
               .map((item) => {
               const Icon = item.icon;
               const isActive = activePage === item.name;
@@ -1657,7 +1886,15 @@ function App() {
                 <button
                   key={item.name}
                   onClick={() => {
-                    setActivePage(item.name);
+                    if (item.sellerOnly) {
+                      setActivePage("Marketplace");
+                      setDashboardView("seller");
+                      setOrdersOpen(true);
+                      loadOrders();
+                      loadSellerListings();
+                    } else {
+                      setActivePage(item.name);
+                    }
                     setMobileMenuOpen(false);
                   }}
                   className={`flex w-full items-center justify-between rounded-xl px-3 py-3 text-sm font-medium transition ${
@@ -1745,7 +1982,7 @@ function App() {
 
         <main className="min-w-0 px-4 py-6 pb-28 sm:px-6 lg:px-8 lg:pb-28">
           <div className="mb-6 md:hidden">
-            <GlobalSearch onSelect={selectSearchResult} />
+            <GlobalSearch onSelect={selectSearchResult} onProfile={openUserProfile} />
           </div>
           <div className="mb-7">
             <p className="mb-1 text-sm font-medium text-slate-500">
@@ -1774,13 +2011,27 @@ function App() {
           {activePage === "Campus Services" && <CampusServices />}
 
           {activePage === "Messages" && (
-            <Messages
-              user={user}
-              socket={messageSocket}
-              onUnreadCount={setUnreadMessages}
-              initialConversationId={notificationConversationId}
-              onInitialConversationHandled={() => setNotificationConversationId("")}
-            />
+            <>
+              {profileReturnPage && (
+                <button type="button" onClick={() => {
+                  setActivePage(profileReturnPage);
+                  setProfileReturnPage("");
+                  setProfileMessageRecipientId("");
+                }} className="mb-3 min-h-10 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold">
+                  ← Back to {profileReturnPage}
+                </button>
+              )}
+              <Messages
+                user={user}
+                socket={messageSocket}
+                onUnreadCount={setUnreadMessages}
+                initialConversationId={notificationConversationId}
+                onInitialConversationHandled={() => setNotificationConversationId("")}
+                initialRecipientId={profileMessageRecipientId}
+                onInitialRecipientHandled={() => setProfileMessageRecipientId("")}
+                onProfile={openUserProfile}
+              />
+            </>
           )}
 
           {activePage === "Admin Dashboard" && (
@@ -1789,7 +2040,7 @@ function App() {
 
           {activePage === "Discover Students" && (
             <StudentSuggestions
-              onProfile={(id) => selectSearchResult("students", { id })}
+              onProfile={openUserProfile}
             />
           )}
 
@@ -2264,9 +2515,9 @@ function App() {
                 <div className="px-5 pb-6 sm:px-7">
                   <div className="-mt-12 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
                     <div className="flex items-end gap-4">
-                      <div className="flex h-24 w-24 items-center justify-center rounded-3xl border-4 border-white bg-blue-100 text-2xl font-extrabold text-blue-700 shadow-sm">
-                        {userInitials}
-                      </div>
+                      {user.profile?.avatar
+                        ? <img src={user.profile.avatar} alt={`${fullName}'s profile`} className="h-24 w-24 rounded-3xl border-4 border-white object-cover shadow-sm" />
+                        : <div className="flex h-24 w-24 items-center justify-center rounded-3xl border-4 border-white bg-blue-100 text-2xl font-extrabold text-blue-700 shadow-sm">{userInitials}</div>}
                       <div className="pb-1">
                         <h3 className="text-xl font-extrabold">{fullName}</h3>
                         <p className="mt-1 text-sm capitalize text-slate-500">
@@ -2332,6 +2583,48 @@ function App() {
                   </button>
                 </div>
               </div>
+              <section className="rounded-3xl border border-slate-200 bg-white p-5 sm:p-7">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-lg font-extrabold">Follow requests</h3>
+                    <p className="mt-1 text-sm text-slate-500">Approve or decline requests to view private-profile content.</p>
+                  </div>
+                  <button type="button" onClick={refreshFollowRequests} className="min-h-10 rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold">Refresh</button>
+                </div>
+                {followRequestsError && <p role="alert" className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-800">{followRequestsError}</p>}
+                <div className="mt-4 grid gap-5 md:grid-cols-2">
+                  {[
+                    ["Incoming", "incoming", "follower", ["accept", "decline"]],
+                    ["Sent", "outgoing", "following", ["cancel"]],
+                  ].map(([title, listKey, personKey, actions]) => (
+                    <div key={listKey}>
+                      <h4 className="mb-2 text-sm font-bold">{title}</h4>
+                      {followRequests[listKey].length === 0 ? (
+                        <p className="rounded-xl bg-slate-50 p-3 text-sm text-slate-500">No {title.toLowerCase()} requests.</p>
+                      ) : (
+                        <div className="space-y-2">
+                          {followRequests[listKey].map((request) => {
+                            const person = request[personKey];
+                            if (!person?._id) return null;
+                            return (
+                              <div key={request._id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 p-3">
+                                <button type="button" onClick={() => openUserProfile(person)} className="min-h-10 min-w-0 truncate text-left text-sm font-semibold text-primary hover:underline">{person.name}</button>
+                                <div className="flex gap-2">
+                                  {actions.map((action) => (
+                                    <button key={action} type="button" onClick={() => updateFollowAction(person, action)} disabled={followActionLoading === String(person._id)} className={`min-h-9 rounded-lg px-3 py-1.5 text-xs font-bold ${action === "accept" ? "bg-primary text-white" : "border border-slate-200"}`}>
+                                      {followActionLoading === String(person._id) ? "Saving..." : action[0].toUpperCase() + action.slice(1)}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </section>
               <section id="profile-settings" className="rounded-3xl border border-slate-200 bg-white p-5 sm:p-7">
                 <h3 className="text-lg font-extrabold">Profile and privacy settings</h3>
                 <p className="mt-1 text-sm text-slate-500">Choose what campus students can discover and edit the details shown on your profile.</p>
@@ -2390,35 +2683,61 @@ function App() {
                   type="button"
                   onClick={() => {
                     setMarketplaceNotice("");
-                    setListingFormOpen(true);
+                    if (sellerDashboardEligible) {
+                      setListingFormOpen(true);
+                    } else if (sellerStatus.application?.status === "PENDING") {
+                      setMarketplaceNotice("Your seller application is awaiting campus review.");
+                    } else if (sellerStatus.application?.status === "SUSPENDED") {
+                      setMarketplaceError("Seller access is currently suspended.");
+                    } else if (!user.isVerifiedStudent) {
+                      setMarketplaceError("Verify your student account before applying to sell.");
+                    } else {
+                      setSellerApplicationOpen(true);
+                    }
                   }}
                   className="mt-5 inline-flex items-center gap-2 rounded-xl bg-white px-4 py-3 text-sm font-bold text-blue-700 transition hover:bg-blue-50"
                 >
                   <Plus size={18} />
-                  Sell an item
+                  {sellerDashboardEligible ? "Sell an item" : sellerStatus.application?.status === "PENDING" ? "Application pending" : "Apply to sell"}
                 </button>
                 <button
                   type="button"
                   onClick={() => { setDashboardView("buyer"); loadOrders(); setOrdersOpen(true); }}
-                  className="ml-3 inline-flex items-center gap-2 rounded-xl border border-white/40 px-4 py-3 text-sm font-bold text-white transition hover:bg-white/10"
+                  className="ml-3 mt-5 inline-flex items-center gap-2 rounded-xl border border-white/40 px-4 py-3 text-sm font-bold text-white transition hover:bg-white/10"
                 >
-                  Buyer dashboard
+                  My Orders
                 </button>
-                <button
-                  type="button"
-                  onClick={() => { setDashboardView("seller"); loadOrders(); loadSellerListings(); setOrdersOpen(true); }}
-                  className="ml-3 inline-flex items-center gap-2 rounded-xl border border-white/40 px-4 py-3 text-sm font-bold text-white transition hover:bg-white/10"
-                >
-                  Seller dashboard
-                </button>
-                <button
-                  type="button"
-                  onClick={openPayoutSetup}
-                  className="ml-3 mt-3 inline-flex items-center gap-2 rounded-xl border border-white/40 px-4 py-3 text-sm font-bold text-white transition hover:bg-white/10 sm:mt-0"
-                >
-                  Set payout account
-                </button>
+                {sellerDashboardEligible && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => { setDashboardView("seller"); loadOrders(); loadSellerListings(); setOrdersOpen(true); }}
+                      className="ml-3 mt-5 inline-flex items-center gap-2 rounded-xl border border-white/40 px-4 py-3 text-sm font-bold text-white transition hover:bg-white/10"
+                    >
+                      Seller dashboard
+                    </button>
+                    <button
+                      type="button"
+                      onClick={openPayoutSetup}
+                      className="ml-3 mt-5 inline-flex items-center gap-2 rounded-xl border border-white/40 px-4 py-3 text-sm font-bold text-white transition hover:bg-white/10"
+                    >
+                      Set payout account
+                    </button>
+                  </>
+                )}
               </div>
+
+              {sellerStatusError && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{sellerStatusError}</p>}
+              {sellerStatus.application && (
+                <div className={`rounded-xl border p-3 text-sm ${
+                  sellerStatus.application.status === "APPROVED" ? "border-emerald-200 bg-emerald-50 text-emerald-800" :
+                    sellerStatus.application.status === "PENDING" ? "border-amber-200 bg-amber-50 text-amber-900" :
+                      "border-slate-200 bg-white text-slate-700"
+                }`}>
+                  Seller application: <strong>{sellerStatus.application.status.toLowerCase()}</strong>
+                  {sellerStatus.application.reviewNote && <p className="mt-1">{sellerStatus.application.reviewNote}</p>}
+                </div>
+              )}
 
               {marketplaceNotice && (
                 <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm font-semibold text-emerald-800">
@@ -2601,6 +2920,10 @@ function App() {
                         typeof listing.seller === "object"
                           ? listing.seller?.name
                           : "Campus seller";
+                      const sellerId =
+                        typeof listing.seller === "object"
+                          ? listing.seller?._id || listing.seller?.id
+                          : listing.seller;
 
                       return (
                         <article
@@ -2670,19 +2993,21 @@ function App() {
                             </div>
 
                             <div className="mt-4 flex items-center gap-2 border-t border-slate-100 pt-4">
-                              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-blue-100 text-sm font-bold text-blue-700">
-                                {(seller || "S")
+                              <button type="button" disabled={!sellerId} onClick={() => openUserProfile(sellerId)} aria-label={`Open ${seller || "seller"}'s profile`} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-blue-100 text-sm font-bold text-blue-700 disabled:cursor-default">
+                                {listing.seller?.profile?.avatar
+                                  ? <img src={listing.seller.profile.avatar} alt="" className="h-full w-full rounded-full object-cover" />
+                                  : (seller || "S")
                                   .split(" ")
                                   .filter(Boolean)
                                   .slice(0, 2)
                                   .map((part) => part[0].toUpperCase())
                                   .join("")}
-                              </div>
+                              </button>
 
                               <div className="min-w-0">
-                                <p className="truncate text-sm font-semibold text-slate-800">
+                                <button type="button" disabled={!sellerId} onClick={() => openUserProfile(sellerId)} className="block max-w-full truncate text-left text-sm font-semibold text-slate-800 hover:text-blue-700 hover:underline disabled:no-underline">
                                   {seller || "Campus seller"}
-                                </p>
+                                </button>
 
                                 <p className="text-xs text-slate-500">
                                   Campus Connect seller
@@ -2762,6 +3087,62 @@ function App() {
                 </div>
               )}
 
+              {sellerApplicationOpen && (
+                <div className="fixed inset-0 z-[60] flex items-end bg-slate-950/50 p-0 sm:items-center sm:justify-center sm:p-4">
+                  <form onSubmit={submitSellerApplication} className="max-h-[92dvh] w-full overflow-y-auto rounded-t-3xl bg-white p-5 shadow-2xl sm:max-w-xl sm:rounded-3xl sm:p-7">
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <h3 className="text-xl font-extrabold">Apply to sell</h3>
+                        <p className="mt-1 text-sm text-slate-500">Applications are reviewed by an administrator at your campus. You can list products after approval.</p>
+                      </div>
+                      <button type="button" onClick={() => setSellerApplicationOpen(false)} aria-label="Close seller application" className="rounded-lg p-2 text-slate-500 hover:bg-slate-100">✕</button>
+                    </div>
+                    <div className="mt-5 space-y-4">
+                      <label className="block">
+                        <span className="mb-1.5 block text-sm font-semibold">Business or seller name</span>
+                        <input required minLength={2} maxLength={100} value={sellerApplicationForm.businessName} onChange={(event) => setSellerApplicationForm((current) => ({ ...current, businessName: event.target.value }))} className="w-full rounded-xl border border-slate-200 px-4 py-3" />
+                      </label>
+                      <fieldset>
+                        <legend className="mb-2 text-sm font-semibold">What do you plan to sell?</legend>
+                        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                          {[
+                            ["electronics", "Electronics"],
+                            ["fashion", "Fashion"],
+                            ["books", "Books"],
+                            ["food", "Food"],
+                            ["services", "Services"],
+                            ["school_items", "School items"],
+                            ["others", "Other goods"],
+                          ].map(([value, label]) => (
+                            <label key={value} className="flex items-center gap-2 rounded-lg border border-slate-200 p-2.5 text-sm">
+                              <input
+                                type="checkbox"
+                                checked={sellerApplicationForm.categories.includes(value)}
+                                onChange={(event) => setSellerApplicationForm((current) => ({
+                                  ...current,
+                                  categories: event.target.checked
+                                    ? [...current.categories, value]
+                                    : current.categories.filter((category) => category !== value),
+                                }))}
+                              />
+                              {label}
+                            </label>
+                          ))}
+                        </div>
+                      </fieldset>
+                      <label className="block">
+                        <span className="mb-1.5 block text-sm font-semibold">Describe what you will offer and how you will fulfill orders</span>
+                        <textarea required minLength={20} maxLength={1000} rows={4} value={sellerApplicationForm.description} onChange={(event) => setSellerApplicationForm((current) => ({ ...current, description: event.target.value }))} className="w-full resize-y rounded-xl border border-slate-200 px-4 py-3" />
+                      </label>
+                    </div>
+                    {marketplaceError && <p role="alert" className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-800">{marketplaceError}</p>}
+                    <button type="submit" disabled={sellerApplicationSaving || sellerApplicationForm.categories.length === 0} className="mt-5 min-h-12 w-full rounded-xl bg-primary px-4 py-3 font-bold text-white disabled:opacity-50">
+                      {sellerApplicationSaving ? "Submitting..." : "Submit for review"}
+                    </button>
+                  </form>
+                </div>
+              )}
+
               {checkoutListing && (
                 <div className="fixed inset-0 z-[60] flex items-end bg-slate-950/50 p-0 sm:items-center sm:justify-center sm:p-4">
                   <form onSubmit={startCheckout} className="max-h-[92vh] w-full overflow-y-auto rounded-t-3xl bg-white p-5 shadow-2xl sm:max-w-lg sm:rounded-3xl sm:p-7">
@@ -2783,7 +3164,7 @@ function App() {
                   <div className="max-h-[90vh] w-full overflow-y-auto rounded-t-3xl bg-white p-5 shadow-2xl sm:max-w-2xl sm:rounded-3xl sm:p-7">
                     <div className="flex items-start justify-between gap-4">
                       <div>
-                        <h3 className="text-xl font-extrabold">{dashboardView === "seller" ? "Seller dashboard" : "Buyer dashboard"}</h3>
+                        <h3 className="text-xl font-extrabold">{dashboardView === "seller" ? "Seller dashboard" : "My Orders"}</h3>
                         <p className="mt-1 text-sm text-slate-500">{dashboardView === "seller" ? "Manage listings, orders, and payout progress." : "Track your purchases, payments, and delivery."}</p>
                       </div>
                       <button type="button" onClick={() => setOrdersOpen(false)} aria-label="Close dashboard" className="rounded-lg p-2 text-slate-500 hover:bg-slate-100">✕</button>
@@ -2840,22 +3221,29 @@ function App() {
                         <div className="mt-3 space-y-3">
                           {dashboardOrders.map((order) => {
                             const isSeller = dashboardView === "seller";
+                            const counterparty = isSeller ? order.buyer : order.seller;
                             return (
                               <article key={order._id} className="rounded-2xl border border-slate-200 p-4">
                                 <div className="flex flex-wrap items-start justify-between gap-3">
-                                  <div>
-                                    <p className="font-extrabold text-slate-900">{order.listing?.title || "Marketplace item"}</p>
-                                    <p className="mt-1 text-sm text-slate-500">{isSeller ? `Buyer: ${order.buyer?.name || "Student"}` : `Seller: ${order.seller?.name || "Student"}`}</p>
+                                  <div className="flex min-w-0 items-start gap-3">
+                                    {order.listing?.images?.[0] && <img src={order.listing.images[0]} alt="" className="h-16 w-16 shrink-0 rounded-xl object-cover" />}
+                                    <div className="min-w-0">
+                                      <p className="font-extrabold text-slate-900">{order.listing?.title || "Marketplace item"}</p>
+                                      <p className="mt-1 text-sm text-slate-500">
+                                        {isSeller ? "Buyer: " : "Seller: "}
+                                        <button type="button" disabled={!counterparty?._id} onClick={() => openUserProfile(counterparty)} className="font-semibold text-blue-700 hover:underline disabled:text-slate-500 disabled:no-underline">{counterparty?.name || "Student"}</button>
+                                      </p>
+                                    </div>
                                   </div>
-                                  <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-bold text-blue-700">{order.status.replaceAll("_", " ")}</span>
+                                  <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-bold text-blue-700">{(order.status || "UNKNOWN").replaceAll("_", " ")}</span>
                                 </div>
                                 <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-sm text-slate-600">
-                                  <span>₦{Number(order.totalAmount).toLocaleString()}</span><span>Qty: {order.quantity}</span><span>Payment: {order.paymentStatus}</span><span>Delivery: {order.deliveryStatus}</span>
+                                  <span>Amount: ₦{Number(order.totalAmount || 0).toLocaleString()}</span><span>Qty: {order.quantity}</span><span>Payment: {order.paymentStatus}</span><span>Delivery: {order.deliveryStatus}</span>
                                 </div>
                                 <p className="mt-3 text-sm font-semibold text-slate-700">{order.deliveryMethod === "MIDDLEMAN" ? `Campus Connect middleman · ₦${Number(order.deliveryFee || 0).toLocaleString()} fee` : "Seller-to-buyer delivery"}</p>
                                 {isSeller && <p className="mt-1 text-xs text-slate-500">Payout: {order.sellerPayoutStatus} · ₦{Number(order.sellerPayoutAmount || 0).toLocaleString()} after ₦{Number(order.platformCommission || 0).toLocaleString()} commission</p>}
                                 {(isSeller || (order.deliveryMethod === "MIDDLEMAN" && user.role === "admin")) && order.status === "DELIVERED" && <div className="mt-4 flex gap-2"><input inputMode="numeric" maxLength={6} value={deliveryOtpInputs[order._id] || ""} onChange={(event) => setDeliveryOtpInputs((current) => ({ ...current, [order._id]: event.target.value }))} placeholder="Buyer’s 6-digit OTP" className="min-w-0 flex-1 rounded-xl border border-slate-200 px-3 py-2 text-sm" /><button type="button" onClick={() => verifyDeliveryOtp(order._id)} className="rounded-xl bg-blue-700 px-3 py-2 text-sm font-bold text-white">Verify</button></div>}
-                                <p className="mt-3 text-xs text-slate-500">{new Date(order.createdAt).toLocaleString()}</p>
+                                <p className="mt-3 text-xs text-slate-500">Order date: {order.createdAt ? new Date(order.createdAt).toLocaleString() : "Not available"}</p>
                               </article>
                             );
                           })}
@@ -2898,15 +3286,36 @@ function App() {
           )}
 
           {activePage === "Settings" && (
-            <section className="rounded-3xl border border-slate-200 bg-white p-8 text-center">
-              <Settings size={32} className="mx-auto text-blue-700" />
-              <h3 className="mt-4 text-xl font-extrabold">Coming Soon</h3>
-              <p className="mt-2 text-sm text-slate-500">
-                Account profile, privacy, and password settings are available from your Profile page.
-              </p>
-              <button type="button" onClick={() => setActivePage("Profile")} className="mt-5 rounded-xl bg-blue-700 px-4 py-3 text-sm font-bold text-white">
-                Open profile settings
-              </button>
+            <section className="space-y-5">
+              <div className="rounded-3xl border border-slate-200 bg-white p-5 sm:p-8">
+                <h3 className="text-xl font-extrabold">Appearance</h3>
+                <p className="mt-2 text-sm text-slate-500">Choose how Campus Connect looks on this device. Your choice is saved and restored when you return.</p>
+                <div className="mt-5 grid gap-3 sm:grid-cols-2" role="group" aria-label="Color theme">
+                  {["light", "dark"].map((choice) => (
+                    <button
+                      key={choice}
+                      type="button"
+                      onClick={() => setTheme(choice)}
+                      aria-pressed={theme === choice}
+                      className={`min-h-12 rounded-xl border px-4 py-3 text-left font-semibold capitalize transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary ${
+                        theme === choice
+                          ? "border-primary bg-blue-50 text-primary"
+                          : "border-slate-200 hover:bg-slate-50"
+                      }`}
+                    >
+                      {choice} mode{theme === choice ? " · Selected" : ""}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="rounded-3xl border border-slate-200 bg-white p-5 sm:p-8">
+                <Settings size={30} className="text-primary" />
+                <h3 className="mt-3 text-xl font-extrabold">Account settings</h3>
+                <p className="mt-2 text-sm text-slate-500">Profile, privacy, and password settings are available from your Profile page.</p>
+                <button type="button" onClick={() => setActivePage("Profile")} className="mt-5 min-h-11 rounded-xl bg-primary px-4 py-3 text-sm font-bold text-white">
+                  Open profile settings
+                </button>
+              </div>
             </section>
           )}
           {activePage !== "Home Feed" &&
@@ -2964,15 +3373,18 @@ function App() {
                     className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm transition hover:shadow-md sm:p-5"
                   >
                     <div className="flex items-start gap-3">
-                      <div
+                      <button
+                        type="button"
+                        onClick={() => openUserProfile(post.authorId)}
+                        aria-label={`Open ${post.name}'s profile`}
                         className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-sm font-bold text-white ${post.color}`}
                       >
                         {post.initials}
-                      </div>
+                      </button>
 
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-1.5">
-                          <h4 className="text-sm font-bold">{post.name}</h4>
+                          <button type="button" onClick={() => openUserProfile(post.authorId)} className="text-left text-sm font-bold hover:text-blue-700 hover:underline">{post.name}</button>
 
                           {post.verified && (
                             <ShieldCheck
@@ -3282,7 +3694,7 @@ function App() {
         </aside>
       </div>
 
-      <nav className="fixed bottom-0 left-0 right-0 z-50 border-t border-slate-200 bg-white/95 shadow-lg backdrop-blur-md">
+      <nav className="mobile-bottom-navigation fixed bottom-0 left-0 right-0 z-50 border-t border-slate-200 bg-white/95 shadow-lg backdrop-blur-md">
         <div className="mx-auto flex max-w-7xl items-center justify-between overflow-x-auto px-1 sm:px-4">
           {bottomNavigation.map((item) => {
             const Icon = item.icon;
@@ -3360,7 +3772,7 @@ function App() {
         <div className="fixed inset-0 z-[85] flex items-end justify-center bg-slate-950/50 sm:items-center sm:p-4" onMouseDown={(event) => {
           if (event.target === event.currentTarget) setSelectedSearchResult(null);
         }}>
-          <section role="dialog" aria-modal="true" aria-labelledby="search-result-title" className="max-h-[90vh] w-full overflow-y-auto rounded-t-3xl bg-white p-5 shadow-2xl sm:max-w-xl sm:rounded-3xl sm:p-7">
+          <section role="dialog" aria-modal="true" aria-labelledby="search-result-title" className="max-h-[90dvh] w-full overflow-y-auto rounded-t-3xl bg-white p-5 shadow-2xl sm:max-w-xl sm:rounded-3xl sm:p-7">
             <div className="flex items-start justify-between gap-4">
               <div>
                 <p className="text-xs font-bold uppercase tracking-wide text-blue-700">{selectedSearchResult.type}</p>
@@ -3370,10 +3782,71 @@ function App() {
             </div>
             {selectedSearchResult.type === "students" && (
               <div className="mt-5">
-                {selectedSearchResult.item.avatar && <img src={selectedSearchResult.item.avatar} alt="" className="mb-4 h-20 w-20 rounded-full object-cover" />}
-                <p className="text-sm text-slate-600">{[selectedSearchResult.item.institution, selectedSearchResult.item.campus, selectedSearchResult.item.department, selectedSearchResult.item.level].filter(Boolean).join(" · ")}</p>
-                {selectedSearchResult.item.bio && <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-700">{selectedSearchResult.item.bio}</p>}
-                {selectedSearchResult.item.isVerifiedStudent && <p className="mt-3 text-sm font-semibold text-blue-700">Verified student</p>}
+                <div className="flex items-start gap-4">
+                  {selectedStudentProfile.avatar
+                    ? <img src={selectedStudentProfile.avatar} alt={`${selectedStudentProfile.name}'s profile`} className="h-20 w-20 shrink-0 rounded-2xl object-cover" />
+                    : <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-2xl bg-blue-100 text-xl font-extrabold text-blue-700">{selectedStudentProfile.name?.[0] || "S"}</div>}
+                  <div className="min-w-0">
+                    <p className="text-sm text-slate-600">{[selectedStudentProfile.institution, selectedStudentProfile.campus].filter(Boolean).join(" · ") || "Campus Connect student"}</p>
+                    <p className="mt-1 text-sm text-slate-500">{[selectedStudentProfile.department, selectedStudentProfile.level].filter(Boolean).join(" · ")}</p>
+                    {selectedStudentProfile.isVerifiedStudent && <p className="mt-2 text-sm font-semibold text-blue-700">Verified student</p>}
+                  </div>
+                </div>
+                {selectedStudentProfile.bio && <p className="mt-4 whitespace-pre-wrap text-sm leading-6 text-slate-700">{selectedStudentProfile.bio}</p>}
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <button type="button" onClick={() => loadFollowList(selectedStudentProfile.id, "followers")} className="rounded-lg bg-slate-50 px-3 py-2 text-sm hover:bg-slate-100">
+                    <strong>{selectedStudentProfile.followersCount || 0}</strong> followers
+                  </button>
+                  <button type="button" onClick={() => loadFollowList(selectedStudentProfile.id, "following")} className="rounded-lg bg-slate-50 px-3 py-2 text-sm hover:bg-slate-100">
+                    <strong>{selectedStudentProfile.followingCount || 0}</strong> following
+                  </button>
+                </div>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    disabled={followActionLoading === String(selectedStudentProfile.id)}
+                    onClick={() => updateFollowAction(
+                      selectedStudentProfile,
+                      selectedProfileFollowStatus === "PENDING"
+                        ? "cancel"
+                        : selectedProfileFollowStatus === "ACCEPTED"
+                          ? "unfollow"
+                          : "request",
+                    )}
+                    className="min-h-10 rounded-xl bg-primary px-4 py-2 text-sm font-bold text-white disabled:opacity-50"
+                  >
+                    {followActionLoading === String(selectedStudentProfile.id)
+                      ? "Saving..."
+                      : selectedProfileFollowStatus === "PENDING"
+                        ? "Cancel request"
+                        : selectedProfileFollowStatus === "ACCEPTED"
+                          ? "Unfollow"
+                          : "Follow"}
+                  </button>
+                  <button type="button" onClick={() => openProfileConversation(selectedStudentProfile)} className="min-h-10 rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold hover:bg-slate-50">
+                    Message
+                  </button>
+                </div>
+                {profileNotice && <p role="status" className="mt-3 rounded-xl bg-emerald-50 p-3 text-sm text-emerald-800">{profileNotice}</p>}
+                {profileError && <p role="alert" className="mt-3 rounded-xl bg-red-50 p-3 text-sm text-red-800">{profileError}</p>}
+                <section className="mt-6 border-t border-slate-100 pt-5">
+                  <h3 className="font-extrabold">Recent posts</h3>
+                  {(selectedStudentProfile.posts || []).length === 0 ? (
+                    <p className="mt-3 rounded-xl bg-slate-50 p-4 text-sm text-slate-500">No posts are available to you.</p>
+                  ) : (
+                    <div className="mt-3 space-y-3">
+                      {selectedStudentProfile.posts.map((post) => (
+                        <article key={post.id} className="rounded-xl border border-slate-200 p-3">
+                          {post.text && <p className="whitespace-pre-wrap text-sm leading-6 text-slate-700">{post.text}</p>}
+                          {post.media?.url && (post.media.type === "video"
+                            ? <video src={post.media.url} controls className="mt-3 max-h-64 w-full rounded-lg bg-black" />
+                            : <img src={post.media.url} alt="Post attachment" className="mt-3 max-h-64 w-full rounded-lg object-contain" />)}
+                          <p className="mt-2 text-xs text-slate-500">{post.createdAt ? new Date(post.createdAt).toLocaleString() : ""}</p>
+                        </article>
+                      ))}
+                    </div>
+                  )}
+                </section>
               </div>
             )}
             {selectedSearchResult.type === "posts" && (
@@ -3403,6 +3876,38 @@ function App() {
                 }} className="rounded-xl bg-blue-700 px-4 py-3 text-sm font-bold text-white">Open section</button>
               )}
             </div>
+          </section>
+        </div>
+      )}
+      {followListDialog && (
+        <div className="fixed inset-0 z-[90] flex items-end justify-center bg-slate-950/50 sm:items-center sm:p-4" onMouseDown={(event) => {
+          if (event.target === event.currentTarget) setFollowListDialog(null);
+        }}>
+          <section role="dialog" aria-modal="true" aria-labelledby="follow-list-title" className="max-h-[85dvh] w-full overflow-y-auto rounded-t-3xl bg-white p-5 shadow-2xl sm:max-w-md sm:rounded-3xl sm:p-6">
+            <div className="flex items-center justify-between gap-3">
+              <h2 id="follow-list-title" className="text-lg font-extrabold capitalize">{followListDialog.list}</h2>
+              <button type="button" onClick={() => setFollowListDialog(null)} aria-label="Close follow list" className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"><X size={20} /></button>
+            </div>
+            {followListDialog.error && <p role="alert" className="mt-3 rounded-xl bg-red-50 p-3 text-sm text-red-800">{followListDialog.error}</p>}
+            {followListDialog.users.length === 0 && !followListDialog.loading ? (
+              <p className="mt-4 rounded-xl bg-slate-50 p-4 text-sm text-slate-500">No discoverable students to show.</p>
+            ) : (
+              <div className="mt-4 divide-y divide-slate-100">
+                {followListDialog.users.map((person) => (
+                  <button key={person.id} type="button" onClick={() => {
+                    setFollowListDialog(null);
+                    openUserProfile(person.id);
+                  }} className="flex min-h-14 w-full items-center gap-3 py-2 text-left hover:bg-slate-50">
+                    {person.avatar
+                      ? <img src={person.avatar} alt="" className="h-10 w-10 rounded-full object-cover" />
+                      : <span className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-100 font-bold text-blue-700">{person.name?.[0] || "S"}</span>}
+                    <span className="truncate text-sm font-semibold">{person.name}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+            {followListDialog.loading && <p className="py-3 text-center text-sm text-slate-500">Loading...</p>}
+            {followListDialog.hasMore && <button type="button" disabled={followListDialog.loading} onClick={loadMoreFollowList} className="mt-3 min-h-10 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold disabled:opacity-50">Load more</button>}
           </section>
         </div>
       )}

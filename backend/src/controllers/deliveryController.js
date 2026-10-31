@@ -3,6 +3,7 @@ import nodemailer from "nodemailer";
 
 import Order from "../models/Order.js";
 import { releaseSellerPayout } from "../services/payoutService.js";
+import { getSellerEligibility } from "../services/sellerEligibility.js";
 
 const OTP_EXPIRY_MINUTES = 30;
 const MAX_OTP_ATTEMPTS = 5;
@@ -97,6 +98,10 @@ export const updateDeliveryStatus = async (req, res) => {
 
     const isSeller = order.seller.toString() === req.user._id.toString();
     const isCampusMiddleman = req.user.role === "admin";
+
+    if (isSeller && !(await getSellerEligibility(req.user._id)).eligible) {
+      return res.status(403).json({ message: "Approved seller access is required to manage this delivery." });
+    }
 
     if (
       (order.deliveryMethod === "SELLER_TO_BUYER" && !isSeller) ||
@@ -207,6 +212,10 @@ export const verifyDelivery = async (req, res) => {
 
     const isSeller = order.seller.toString() === req.user._id.toString();
     const isCampusMiddleman = req.user.role === "admin";
+
+    if (isSeller && !(await getSellerEligibility(req.user._id)).eligible) {
+      return res.status(403).json({ message: "Approved seller access is required to verify this delivery." });
+    }
 
     if (
       (order.deliveryMethod === "SELLER_TO_BUYER" && !isSeller) ||

@@ -1,6 +1,12 @@
 import Group from "../models/Group.js";
 import User from "../models/User.js";
 import GroupMessage from "../models/GroupMessage.js";
+import {
+  canAccessGroup,
+  groupVisibilityFilter,
+  isGroupMember,
+} from "../services/groupAccess.js";
+import { PUBLIC_PROFILE_FIELDS } from "../services/publicProfileProjection.js";
 
 export const createGroup = async (req, res) => {
   try {
@@ -70,13 +76,9 @@ export const getGroups = async (req, res) => {
       });
     }
 
-    const groups = await Group.find({
-      institution: user.institution,
-      campus: user.campus,
-      status: "ACTIVE",
-    })
-      .populate("creator", "name email profile.avatar")
-      .populate("members.user", "name email profile.avatar")
+    const groups = await Group.find(groupVisibilityFilter(user))
+      .populate("creator", PUBLIC_PROFILE_FIELDS)
+      .populate("members.user", PUBLIC_PROFILE_FIELDS)
       .sort({ createdAt: -1 });
 
     res.json({
@@ -108,8 +110,8 @@ export const getGroupById = async (req, res) => {
     }
 
     const group = await Group.findById(req.params.id)
-      .populate("creator", "name email profile.avatar")
-      .populate("members.user", "name email profile.avatar");
+      .populate("creator", PUBLIC_PROFILE_FIELDS)
+      .populate("members.user", PUBLIC_PROFILE_FIELDS);
 
     if (!group) {
       return res.status(404).json({
@@ -117,10 +119,7 @@ export const getGroupById = async (req, res) => {
       });
     }
 
-    if (
-      group.institution.toString() !== user.institution.toString() ||
-      group.campus.toString() !== user.campus.toString()
-    ) {
+    if (!canAccessGroup(group, user)) {
       return res.status(403).json({
         message: "You cannot access this group",
       });
@@ -170,13 +169,17 @@ export const joinGroup = async (req, res) => {
       });
     }
 
-    const alreadyMember = group.members.some(
-      (member) => member.user.toString() === user._id.toString(),
-    );
+    const alreadyMember = isGroupMember(group, user._id);
 
     if (alreadyMember) {
       return res.status(400).json({
         message: "You are already a member of this group",
+      });
+    }
+
+    if (group.isPrivate) {
+      return res.status(403).json({
+        message: "Private groups require an invitation from a group member.",
       });
     }
 
@@ -492,22 +495,9 @@ export const getGroupMessages = async (req, res) => {
       });
     }
 
-    if (
-      group.institution.toString() !== user.institution.toString() ||
-      group.campus.toString() !== user.campus.toString()
-    ) {
+    if (!canAccessGroup(group, user) || !isGroupMember(group, user._id)) {
       return res.status(403).json({
-        message: "You cannot access this group",
-      });
-    }
-
-    const isMember = group.members.some(
-      (member) => member.user.toString() === user._id.toString(),
-    );
-
-    if (!isMember) {
-      return res.status(403).json({
-        message: "You are not a member of this group",
+        message: "You cannot access this group's messages",
       });
     }
 
@@ -520,7 +510,7 @@ export const getGroupMessages = async (req, res) => {
     const messages = await GroupMessage.find({
       group: group._id,
     })
-      .populate("sender", "name email profile.avatar")
+      .populate("sender", PUBLIC_PROFILE_FIELDS)
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit);
@@ -571,17 +561,12 @@ export const deleteGroupMessage = async (req, res) => {
       });
     }
 
-    if (
-      group.institution.toString() !== user.institution.toString() ||
-      group.campus.toString() !== user.campus.toString()
-    ) {
-      return res.status(403).json({
-        message: "You cannot access this group",
-      });
+    if (!canAccessGroup(group, user)) {
+      return res.status(403).json({ message: "You cannot access this group" });
     }
 
     const member = group.members.find(
-      (member) => member.user.toString() === user._id.toString(),
+      (item) => String(item.user?._id || item.user) === String(user._id),
     );
 
     if (!member) {
@@ -639,22 +624,9 @@ export const sendGroupImage = async (req, res) => {
       });
     }
 
-    if (
-      group.institution.toString() !== user.institution.toString() ||
-      group.campus.toString() !== user.campus.toString()
-    ) {
+    if (!canAccessGroup(group, user) || !isGroupMember(group, user._id)) {
       return res.status(403).json({
-        message: "You cannot access this group",
-      });
-    }
-
-    const isMember = group.members.some(
-      (member) => member.user.toString() === user._id.toString(),
-    );
-
-    if (!isMember) {
-      return res.status(403).json({
-        message: "You are not a member of this group",
+        message: "You cannot access this group's messages",
       });
     }
 
@@ -675,7 +647,7 @@ export const sendGroupImage = async (req, res) => {
 
     const populatedMessage = await GroupMessage.findById(
       newMessage._id,
-    ).populate("sender", "name email profile.avatar");
+    ).populate("sender", PUBLIC_PROFILE_FIELDS);
 
     const io = req.app.get("io");
 

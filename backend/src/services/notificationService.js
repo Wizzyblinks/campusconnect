@@ -36,7 +36,7 @@ export const createNotification = async ({
           sourceId,
         },
       },
-      { new: true, upsert: true, runValidators: true },
+      { returnDocument: "after", upsert: true, runValidators: true },
     );
   } catch (error) {
     if (error.code !== 11000) throw error;

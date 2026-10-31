@@ -133,7 +133,7 @@ export const setUserRestriction = async (req, res) => {
           restrictedAt: restricted ? new Date() : null,
         },
       },
-      { new: true, runValidators: true },
+      { returnDocument: "after", runValidators: true },
     ).select(
       "name email role isVerifiedStudent isRestricted isOnline +restrictionReason +restrictedAt",
     );
@@ -246,7 +246,7 @@ export const reviewMessageReport = async (req, res) => {
           reviewedAt: new Date(),
         },
       },
-      { new: true, runValidators: true },
+      { returnDocument: "after", runValidators: true },
     )
       .populate("participants", "name profile.avatar")
       .populate("reviewedBy", "name");
@@ -301,7 +301,7 @@ export const reviewPostReport = async (req, res) => {
           reviewedAt: new Date(),
         },
       },
-      { new: true, runValidators: true },
+      { returnDocument: "after", runValidators: true },
     ).populate("reviewedBy", "name");
     if (!report) return res.status(404).json({ message: "Open post report not found." });
     return res.json({ message: "Post report review saved.", report });

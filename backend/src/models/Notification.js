@@ -14,7 +14,7 @@ const notificationSchema = new mongoose.Schema(
     },
     type: {
       type: String,
-      enum: ["post_like", "post_comment", "direct_message"],
+      enum: ["post_like", "post_comment", "direct_message", "follow_request"],
       required: true,
     },
     title: {
@@ -31,7 +31,7 @@ const notificationSchema = new mongoose.Schema(
     },
     targetType: {
       type: String,
-      enum: ["post", "conversation"],
+      enum: ["post", "conversation", "user"],
       required: true,
     },
     targetId: {

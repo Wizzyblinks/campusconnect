@@ -291,7 +291,7 @@ export const confirmPayment = async (req, res) => {
         },
       },
       {
-        new: true,
+        returnDocument: "after",
       },
     );
 

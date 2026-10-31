@@ -122,7 +122,7 @@ export const updateNews = async (req, res) => {
     const news = await News.findOneAndUpdate(
       { _id: req.params.id, ...newsScope(req.user) },
       { $set: fields },
-      { new: true, runValidators: true },
+      { returnDocument: "after", runValidators: true },
     ).populate("author", "name");
     if (!news) {
       return res.status(404).json({ message: "Campus news item not found" });

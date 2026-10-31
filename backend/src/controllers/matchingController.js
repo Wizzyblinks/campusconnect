@@ -319,7 +319,7 @@ export const actOnProfile = async (req, res) => {
     await VibeCheckInteraction.findOneAndUpdate(
       { actor: req.user._id, target: target._id },
       { $set: { action } },
-      { upsert: true, new: true, runValidators: true, setDefaultsOnInsert: true },
+      { upsert: true, returnDocument: "after", runValidators: true, setDefaultsOnInsert: true },
     );
 
     const matched =

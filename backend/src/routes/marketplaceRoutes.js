@@ -9,23 +9,30 @@ import {
   updateListing,
   deleteListing,
 } from "../controllers/marketplaceController.js";
+import {
+  getSellerApplicationStatus,
+  submitSellerApplication,
+} from "../controllers/sellerApplicationController.js";
 
 import protect from "../middleware/authMiddleware.js";
+import requireSeller from "../middleware/requireSeller.js";
 import uploadMarketplaceMedia from "../middleware/marketplaceUploadMiddleware.js";
 
 const router = express.Router();
 
-router.post("/", protect, uploadMarketplaceMedia.array("media", 4), createListing);
+router.get("/seller-status", protect, getSellerApplicationStatus);
+router.post("/seller-application", protect, submitSellerApplication);
+router.post("/", protect, requireSeller, uploadMarketplaceMedia.array("media", 4), createListing);
 
 router.get("/", protect, getMarketplaceListings);
 
-router.get("/mine", protect, getMyListings);
+router.get("/mine", protect, requireSeller, getMyListings);
 
 router.get("/:id", protect, getListingById);
 
-router.patch("/:id", protect, uploadMarketplaceMedia.array("media", 4), updateListing);
+router.patch("/:id", protect, requireSeller, uploadMarketplaceMedia.array("media", 4), updateListing);
 
-router.delete("/:id", protect, deleteListing);
+router.delete("/:id", protect, requireSeller, deleteListing);
 
 router.use((error, req, res, next) => {
   if (error instanceof multer.MulterError) {

@@ -1,5 +1,12 @@
 @import "tailwindcss";
 
+@theme {
+  --color-primary: #1d4ed8;
+  --color-blue-600: #1d4ed8;
+  --color-blue-700: #1d4ed8;
+  --color-blue-800: #1d4ed8;
+}
+
 :root {
   font-family:
     Inter,
@@ -24,12 +31,14 @@
 html {
   min-width: 320px;
   scroll-behavior: smooth;
+  overflow-x: clip;
 }
 
 body {
   margin: 0;
   min-width: 320px;
-  min-height: 100vh;
+  min-height: 100dvh;
+  overflow-x: clip;
 }
 
 button,
@@ -40,4 +49,230 @@ textarea {
 
 button {
   cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+.mobile-bottom-navigation {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.mobile-bottom-navigation button {
+  min-width: 0;
+}
+
+.mobile-bottom-navigation button > span:last-of-type {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dark {
+  color-scheme: dark;
+}
+
+.dark body {
+  color: #e2e8f0;
+  background: #0b1220;
+}
+
+.dark .bg-white {
+  background-color: #111827;
+}
+
+.dark .bg-white\/90,
+.dark .bg-white\/95 {
+  background-color: rgb(17 24 39 / 95%);
+}
+
+.dark .bg-slate-200,
+.dark .bg-slate-300,
+.dark .bg-gray-100,
+.dark .bg-gray-200 {
+  background-color: #334155;
+}
+
+.dark .bg-gray-50 {
+  background-color: #1e293b;
+}
+
+.dark .bg-slate-50,
+.dark .bg-slate-100 {
+  background-color: #1e293b;
+}
+
+.dark .bg-blue-50,
+.dark .bg-blue-50\/60,
+.dark .bg-blue-50\/70 {
+  background-color: #172554;
+}
+
+.dark .bg-blue-100 {
+  background-color: #1e3a8a;
+}
+
+.dark .bg-green-100,
+.dark .bg-emerald-50,
+.dark .bg-emerald-100,
+.dark .bg-green-50 {
+  background-color: #052e25;
+}
+
+.dark .bg-amber-100,
+.dark .bg-orange-100,
+.dark .bg-yellow-50,
+.dark .bg-amber-50,
+.dark .bg-orange-50,
+.dark .bg-yellow-100 {
+  background-color: #422006;
+}
+
+.dark .bg-red-50,
+.dark .bg-red-100 {
+  background-color: #450a0a;
+}
+
+.dark .bg-pink-50,
+.dark .bg-pink-100,
+.dark .bg-rose-50 {
+  background-color: #500724;
+}
+
+.dark .bg-purple-50 {
+  background-color: #2e1065;
+}
+
+.dark .text-slate-900,
+.dark .text-slate-800,
+.dark .text-slate-700 {
+  color: #e2e8f0;
+}
+
+.dark .text-slate-600,
+.dark .text-slate-500 {
+  color: #cbd5e1;
+}
+
+.dark .text-slate-400 {
+  color: #94a3b8;
+}
+
+.dark .text-gray-900,
+.dark .text-gray-800,
+.dark .text-gray-700 {
+  color: #e2e8f0;
+}
+
+.dark .text-gray-600,
+.dark .text-gray-500 {
+  color: #cbd5e1;
+}
+
+.dark .text-blue-600,
+.dark .text-blue-700,
+.dark .text-blue-800,
+.dark .text-blue-900 {
+  color: #93c5fd;
+}
+
+.dark .text-green-700,
+.dark .text-green-800,
+.dark .text-emerald-700,
+.dark .text-emerald-800 {
+  color: #86efac;
+}
+
+.dark .text-amber-700,
+.dark .text-amber-800,
+.dark .text-amber-900,
+.dark .text-orange-600,
+.dark .text-orange-700,
+.dark .text-yellow-700 {
+  color: #fcd34d;
+}
+
+.dark .text-red-700,
+.dark .text-red-800 {
+  color: #fca5a5;
+}
+
+.dark .text-pink-600,
+.dark .text-pink-700,
+.dark .text-pink-800,
+.dark .text-purple-700,
+.dark .text-purple-800,
+.dark .text-rose-700 {
+  color: #f9a8d4;
+}
+
+.dark .border-gray-100,
+.dark .border-gray-200,
+.dark .border-gray-300 {
+  border-color: #334155;
+}
+
+.dark .border-slate-100,
+.dark .border-slate-200,
+.dark .border-slate-300 {
+  border-color: #334155;
+}
+
+.dark .divide-slate-100 > :not([hidden]) ~ :not([hidden]) {
+  border-color: #334155;
+}
+
+.dark .border-amber-200,
+.dark .border-green-200,
+.dark .border-red-200,
+.dark .border-pink-200,
+.dark .border-purple-300 {
+  border-color: #475569;
+}
+
+.dark input:not([type="checkbox"]):not([type="radio"]),
+.dark textarea,
+.dark select {
+  color: #e2e8f0;
+  background-color: #0f172a;
+  border-color: #475569;
+}
+
+.dark input::placeholder,
+.dark textarea::placeholder {
+  color: #94a3b8;
+}
+
+.dark .hover\:bg-slate-50:hover,
+.dark .hover\:bg-slate-100:hover {
+  background-color: #1e293b;
+}
+
+.dark .hover\:bg-gray-50:hover,
+.dark .hover\:bg-gray-100:hover {
+  background-color: #1e293b;
+}
+
+.dark .hover\:bg-blue-50:hover,
+.dark .hover\:bg-purple-50:hover,
+.dark .hover\:bg-emerald-50:hover {
+  background-color: #1e293b;
+}
+
+.dark .ring-white {
+  --tw-ring-color: #111827;
+}
+
+@media (max-width: 640px) {
+  #root {
+    min-width: 320px;
+    overflow-x: clip;
+  }
+}
+
+@media (max-width: 360px) {
+  .mobile-bottom-navigation span:last-of-type {
+    font-size: 8px;
+  }
 }

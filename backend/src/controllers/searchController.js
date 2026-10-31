@@ -72,7 +72,7 @@ export const searchCampusConnect = async (req, res) => {
         $and: [
           {
             $or: [
-              { isPrivate: false },
+              { isPrivate: { $ne: true } },
               { isPrivate: true, "members.user": req.user._id },
             ],
           },

@@ -53,7 +53,7 @@ export const markNotificationRead = async (req, res) => {
     const notification = await Notification.findOneAndUpdate(
       notificationOwnerFilter(req.user._id, req.params.id),
       { $set: { readAt: new Date() } },
-      { new: true },
+      { returnDocument: "after" },
     )
       .populate("actor", "name profile.avatar")
       .lean();
