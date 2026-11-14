@@ -62,6 +62,8 @@ const navigation = [
   { name: "Admin Dashboard", icon: ShieldCheck, adminOnly: true },
 ];
 
+const MARKETPLACE_COMING_SOON = true;
+
 function getSavedUser() {
   try {
     const token = localStorage.getItem("token");
@@ -112,6 +114,96 @@ const normalizePost = (post, institutionLabel = "Campus Connect Student") => {
     media: post.media,
   };
 };
+
+function SellerApplicationDialog({
+  isOpen,
+  form,
+  onFormChange,
+  onSubmit,
+  onClose,
+  isSaving,
+  error,
+}) {
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-end bg-slate-950/50 p-0 sm:items-center sm:justify-center sm:p-4">
+      <form onSubmit={onSubmit} className="max-h-[92dvh] w-full overflow-y-auto rounded-t-3xl bg-white p-5 shadow-2xl sm:max-w-xl sm:rounded-3xl sm:p-7">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h3 className="text-xl font-extrabold">Apply to become a seller</h3>
+            <p className="mt-1 text-sm text-slate-500">Applications are reviewed by an administrator. Listing and selling will be available when the marketplace opens.</p>
+          </div>
+          <button type="button" onClick={onClose} aria-label="Close seller application" className="rounded-lg p-2 text-slate-500 hover:bg-slate-100">✕</button>
+        </div>
+        <div className="mt-5 space-y-4">
+          <label className="block">
+            <span className="mb-1.5 block text-sm font-semibold">Applicant full name</span>
+            <input required minLength={2} maxLength={80} value={form.applicantName} onChange={(event) => onFormChange((current) => ({ ...current, applicantName: event.target.value }))} className="w-full rounded-xl border border-slate-200 px-4 py-3" />
+          </label>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <label className="block">
+              <span className="mb-1.5 block text-sm font-semibold">Phone number</span>
+              <input required type="tel" minLength={7} maxLength={30} value={form.applicantPhone} onChange={(event) => onFormChange((current) => ({ ...current, applicantPhone: event.target.value }))} className="w-full rounded-xl border border-slate-200 px-4 py-3" />
+            </label>
+            <label className="block">
+              <span className="mb-1.5 block text-sm font-semibold">Contact email</span>
+              <input required type="email" maxLength={254} value={form.contactEmail} onChange={(event) => onFormChange((current) => ({ ...current, contactEmail: event.target.value }))} className="w-full rounded-xl border border-slate-200 px-4 py-3" />
+            </label>
+          </div>
+          <label className="block">
+            <span className="mb-1.5 block text-sm font-semibold">Business or seller name</span>
+            <input required minLength={2} maxLength={100} value={form.businessName} onChange={(event) => onFormChange((current) => ({ ...current, businessName: event.target.value }))} className="w-full rounded-xl border border-slate-200 px-4 py-3" />
+          </label>
+          <label className="block">
+            <span className="mb-1.5 block text-sm font-semibold">Other contact information <span className="font-normal text-slate-500">(optional)</span></span>
+            <input maxLength={120} value={form.contactInfo} onChange={(event) => onFormChange((current) => ({ ...current, contactInfo: event.target.value }))} className="w-full rounded-xl border border-slate-200 px-4 py-3" placeholder="Store page, preferred contact method, etc." />
+          </label>
+          <fieldset>
+            <legend className="mb-2 text-sm font-semibold">What do you plan to sell?</legend>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+              {[
+                ["electronics", "Electronics"],
+                ["fashion", "Fashion"],
+                ["books", "Books"],
+                ["food", "Food"],
+                ["services", "Services"],
+                ["school_items", "School items"],
+                ["others", "Other goods"],
+              ].map(([value, label]) => (
+                <label key={value} className="flex items-center gap-2 rounded-lg border border-slate-200 p-2.5 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={form.categories.includes(value)}
+                    onChange={(event) => onFormChange((current) => ({
+                      ...current,
+                      categories: event.target.checked
+                        ? [...current.categories, value]
+                        : current.categories.filter((category) => category !== value),
+                    }))}
+                  />
+                  {label}
+                </label>
+              ))}
+            </div>
+          </fieldset>
+          <label className="block">
+            <span className="mb-1.5 block text-sm font-semibold">Describe what you will offer and how you will fulfill orders</span>
+            <textarea required minLength={20} maxLength={1000} rows={4} value={form.description} onChange={(event) => onFormChange((current) => ({ ...current, description: event.target.value }))} className="w-full resize-y rounded-xl border border-slate-200 px-4 py-3" />
+          </label>
+          <label className="block">
+            <span className="mb-1.5 block text-sm font-semibold">Additional information <span className="font-normal text-slate-500">(optional)</span></span>
+            <textarea maxLength={1000} rows={3} value={form.additionalInfo} onChange={(event) => onFormChange((current) => ({ ...current, additionalInfo: event.target.value }))} className="w-full resize-y rounded-xl border border-slate-200 px-4 py-3" placeholder="Relevant experience, sourcing, or supporting details" />
+          </label>
+        </div>
+        {error && <p role="alert" className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-800">{error}</p>}
+        <button type="submit" disabled={isSaving || form.categories.length === 0} className="mt-5 min-h-12 w-full rounded-xl bg-primary px-4 py-3 font-bold text-white disabled:opacity-50">
+          {isSaving ? "Submitting..." : "Submit for review"}
+        </button>
+      </form>
+    </div>
+  );
+}
 
 function App() {
   const [user, setUser] = useState(getSavedUser);
@@ -512,6 +604,7 @@ function App() {
   const [sellerListingsLoading, setSellerListingsLoading] = useState(false);
   const [sellerListingsError, setSellerListingsError] = useState("");
   const [sellerStatus, setSellerStatus] = useState({ eligible: false, legacySeller: false, application: null });
+  const [sellerStatusLoading, setSellerStatusLoading] = useState(true);
   const [sellerStatusError, setSellerStatusError] = useState("");
   const [sellerApplicationOpen, setSellerApplicationOpen] = useState(false);
   const [sellerApplicationSaving, setSellerApplicationSaving] = useState(false);
@@ -595,6 +688,7 @@ function App() {
   }
 
   async function loadSellerStatus() {
+      setSellerStatusLoading(true);
       setSellerStatusError("");
       try {
         const data = await apiRequest("/api/marketplace/seller-status");
@@ -609,7 +703,41 @@ function App() {
       } catch (error) {
         setSellerStatusError(error.message || "We couldn't check seller application status.");
         return null;
+      } finally {
+        setSellerStatusLoading(false);
       }
+  }
+
+  function openSellerApplication() {
+      setMarketplaceError("");
+      setMarketplaceNotice("");
+      if (sellerStatus.application?.status === "PENDING") {
+        setMarketplaceNotice("Your seller application is already awaiting admin review.");
+        return;
+      }
+      if (sellerStatus.eligible || sellerStatus.application?.status === "APPROVED") {
+        setMarketplaceNotice("Your seller application has already been approved.");
+        return;
+      }
+      if (sellerStatus.application?.status === "SUSPENDED") {
+        setMarketplaceError("Seller access is currently suspended.");
+        return;
+      }
+      if (!user.isVerifiedStudent) {
+        setMarketplaceError("Verify your student account before applying to sell.");
+        return;
+      }
+      setSellerApplicationForm({
+        businessName: "",
+        applicantName: user?.name || "",
+        applicantPhone: user?.profile?.phone || "",
+        contactEmail: user?.email || "",
+        contactInfo: "",
+        additionalInfo: "",
+        categories: [],
+        description: "",
+      });
+      setSellerApplicationOpen(true);
   }
 
   async function submitSellerApplication(event) {
@@ -637,7 +765,7 @@ function App() {
           categories: [],
           description: "",
         });
-        setMarketplaceNotice(data.message || "Your seller application was submitted.");
+        setMarketplaceNotice("Your seller application has been submitted and is awaiting admin review.");
       } catch (error) {
         setMarketplaceError(error.message || "We couldn't submit your seller application.");
       } finally {
@@ -792,10 +920,11 @@ function App() {
   }, [user]);
 
   useEffect(() => {
-    if (!user || activePage !== "Marketplace") {
+    if (!user || activePage !== "Marketplace") return;
+    if (MARKETPLACE_COMING_SOON) {
+      loadSellerStatus();
       return;
     }
-
     loadMarketplaceListings();
     loadOrders();
     loadSellerStatus().then((status) => {
@@ -1783,6 +1912,8 @@ function App() {
 
   const accountId = String(user?._id || user?.id || "");
   const sellerDashboardEligible = Boolean(sellerStatus.eligible);
+  const sellerApplicationStatus = sellerStatus.application?.status || (sellerDashboardEligible ? "APPROVED" : "");
+  const sellerApplicationApproved = sellerDashboardEligible || sellerApplicationStatus === "APPROVED";
   const selectedStudentProfile = selectedSearchResult?.type === "students"
     ? selectedSearchResult.item
     : null;
@@ -2917,7 +3048,83 @@ function App() {
               </section>
             </section>
           )}
-          {activePage === "Marketplace" && (
+          {activePage === "Marketplace" && MARKETPLACE_COMING_SOON && (
+            <section className="mx-auto flex min-h-[50vh] max-w-4xl items-center justify-center py-4 sm:py-8">
+              <div className="w-full overflow-hidden rounded-3xl border border-blue-100 bg-white p-6 text-center shadow-sm sm:p-10">
+                <span className="inline-flex items-center gap-2 rounded-full bg-amber-50 px-3 py-1.5 text-xs font-bold uppercase tracking-wide text-amber-800">
+                  <span className="h-2 w-2 rounded-full bg-amber-500" aria-hidden="true" />
+                  Under Maintenance
+                </span>
+                <div className="mx-auto mt-7 flex h-20 w-20 items-center justify-center rounded-3xl bg-gradient-to-br from-blue-700 to-indigo-700 text-white shadow-lg shadow-blue-200">
+                  <ShoppingBag size={38} strokeWidth={1.8} aria-hidden="true" />
+                </div>
+                <h3 className="mt-6 text-2xl font-extrabold tracking-tight text-slate-900 sm:text-3xl">
+                  Marketplace Coming Soon
+                </h3>
+                <p className="mx-auto mt-4 max-w-xl text-sm leading-7 text-slate-600 sm:text-base">
+                  We're working on making buying and selling on Campus Connect safe and seamless. Our marketplace will be available soon. Stay tuned!
+                </p>
+                {marketplaceNotice && (
+                  <p role="status" className="mx-auto mt-6 max-w-xl rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-left text-sm font-semibold text-emerald-800">
+                    {marketplaceNotice}
+                  </p>
+                )}
+                {marketplaceError && !sellerApplicationOpen && (
+                  <p role="alert" className="mx-auto mt-6 max-w-xl rounded-xl border border-red-200 bg-red-50 p-4 text-left text-sm text-red-800">
+                    {marketplaceError}
+                  </p>
+                )}
+                {sellerStatusError && (
+                  <div role="alert" className="mx-auto mt-6 max-w-xl rounded-xl border border-red-200 bg-red-50 p-4 text-left text-sm text-red-800">
+                    <p>{sellerStatusError}</p>
+                    <button type="button" onClick={loadSellerStatus} disabled={sellerStatusLoading} className="mt-2 font-bold underline disabled:opacity-50">
+                      {sellerStatusLoading ? "Refreshing..." : "Refresh application status"}
+                    </button>
+                  </div>
+                )}
+                {sellerStatusLoading && <p role="status" className="mt-5 text-sm text-slate-500">Checking seller application status...</p>}
+                {sellerApplicationStatus && (
+                  <div className={`mx-auto mt-6 max-w-xl rounded-xl border p-4 text-left text-sm ${
+                    sellerApplicationApproved
+                      ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                      : sellerApplicationStatus === "PENDING"
+                        ? "border-amber-200 bg-amber-50 text-amber-900"
+                        : "border-slate-200 bg-slate-50 text-slate-700"
+                  }`}>
+                    <p className="font-bold">Seller application status: {sellerApplicationStatus.charAt(0) + sellerApplicationStatus.slice(1).toLowerCase()}</p>
+                    {sellerApplicationStatus === "PENDING" && <p className="mt-2">Your seller application is under review. We'll notify you once a decision is made.</p>}
+                    {sellerApplicationApproved && <p className="mt-2">Your seller application has been approved. Buying and selling will be available when the marketplace opens.</p>}
+                    {sellerApplicationStatus === "REJECTED" && sellerStatus.application?.reviewNote && <p className="mt-2">Review note: {sellerStatus.application.reviewNote}</p>}
+                    {sellerApplicationStatus === "SUSPENDED" && <p className="mt-2">Seller access is currently suspended.</p>}
+                    <button type="button" onClick={loadSellerStatus} disabled={sellerStatusLoading} className="mt-3 font-semibold underline disabled:opacity-50">
+                      Refresh status
+                    </button>
+                  </div>
+                )}
+                {!sellerApplicationApproved && !["PENDING", "SUSPENDED"].includes(sellerApplicationStatus) && (
+                  <button
+                    type="button"
+                    onClick={openSellerApplication}
+                    disabled={sellerStatusLoading || Boolean(sellerStatusError) || sellerApplicationSaving}
+                    className="mt-7 min-h-12 rounded-xl bg-primary px-6 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Apply to Become a Seller
+                  </button>
+                )}
+                <SellerApplicationDialog
+                  isOpen={sellerApplicationOpen}
+                  form={sellerApplicationForm}
+                  onFormChange={setSellerApplicationForm}
+                  onSubmit={submitSellerApplication}
+                  onClose={() => setSellerApplicationOpen(false)}
+                  isSaving={sellerApplicationSaving}
+                  error={marketplaceError}
+                />
+              </div>
+            </section>
+          )}
+
+          {activePage === "Marketplace" && !MARKETPLACE_COMING_SOON && (
             <section className="space-y-6">
               {/* Marketplace banner */}
               <div className="overflow-hidden rounded-3xl bg-gradient-to-br from-blue-700 via-blue-600 to-indigo-800 p-6 text-white sm:p-8">
@@ -3371,83 +3578,15 @@ function App() {
                 </div>
               )}
 
-              {sellerApplicationOpen && (
-                <div className="fixed inset-0 z-[60] flex items-end bg-slate-950/50 p-0 sm:items-center sm:justify-center sm:p-4">
-                  <form onSubmit={submitSellerApplication} className="max-h-[92dvh] w-full overflow-y-auto rounded-t-3xl bg-white p-5 shadow-2xl sm:max-w-xl sm:rounded-3xl sm:p-7">
-                    <div className="flex items-start justify-between gap-4">
-                      <div>
-                        <h3 className="text-xl font-extrabold">Apply to sell</h3>
-                        <p className="mt-1 text-sm text-slate-500">Applications are reviewed by an administrator at your campus. You can list products after approval.</p>
-                      </div>
-                      <button type="button" onClick={() => setSellerApplicationOpen(false)} aria-label="Close seller application" className="rounded-lg p-2 text-slate-500 hover:bg-slate-100">✕</button>
-                    </div>
-                    <div className="mt-5 space-y-4">
-                      <label className="block">
-                        <span className="mb-1.5 block text-sm font-semibold">Applicant full name</span>
-                        <input required minLength={2} maxLength={80} value={sellerApplicationForm.applicantName} onChange={(event) => setSellerApplicationForm((current) => ({ ...current, applicantName: event.target.value }))} className="w-full rounded-xl border border-slate-200 px-4 py-3" />
-                      </label>
-                      <div className="grid gap-4 sm:grid-cols-2">
-                        <label className="block">
-                          <span className="mb-1.5 block text-sm font-semibold">Phone number</span>
-                          <input required type="tel" minLength={7} maxLength={30} value={sellerApplicationForm.applicantPhone} onChange={(event) => setSellerApplicationForm((current) => ({ ...current, applicantPhone: event.target.value }))} className="w-full rounded-xl border border-slate-200 px-4 py-3" />
-                        </label>
-                        <label className="block">
-                          <span className="mb-1.5 block text-sm font-semibold">Contact email</span>
-                          <input required type="email" maxLength={254} value={sellerApplicationForm.contactEmail} onChange={(event) => setSellerApplicationForm((current) => ({ ...current, contactEmail: event.target.value }))} className="w-full rounded-xl border border-slate-200 px-4 py-3" />
-                        </label>
-                      </div>
-                      <label className="block">
-                        <span className="mb-1.5 block text-sm font-semibold">Business or seller name</span>
-                        <input required minLength={2} maxLength={100} value={sellerApplicationForm.businessName} onChange={(event) => setSellerApplicationForm((current) => ({ ...current, businessName: event.target.value }))} className="w-full rounded-xl border border-slate-200 px-4 py-3" />
-                      </label>
-                      <label className="block">
-                        <span className="mb-1.5 block text-sm font-semibold">Other contact information <span className="font-normal text-slate-500">(optional)</span></span>
-                        <input maxLength={120} value={sellerApplicationForm.contactInfo} onChange={(event) => setSellerApplicationForm((current) => ({ ...current, contactInfo: event.target.value }))} className="w-full rounded-xl border border-slate-200 px-4 py-3" placeholder="Store page, preferred contact method, etc." />
-                      </label>
-                      <fieldset>
-                        <legend className="mb-2 text-sm font-semibold">What do you plan to sell?</legend>
-                        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                          {[
-                            ["electronics", "Electronics"],
-                            ["fashion", "Fashion"],
-                            ["books", "Books"],
-                            ["food", "Food"],
-                            ["services", "Services"],
-                            ["school_items", "School items"],
-                            ["others", "Other goods"],
-                          ].map(([value, label]) => (
-                            <label key={value} className="flex items-center gap-2 rounded-lg border border-slate-200 p-2.5 text-sm">
-                              <input
-                                type="checkbox"
-                                checked={sellerApplicationForm.categories.includes(value)}
-                                onChange={(event) => setSellerApplicationForm((current) => ({
-                                  ...current,
-                                  categories: event.target.checked
-                                    ? [...current.categories, value]
-                                    : current.categories.filter((category) => category !== value),
-                                }))}
-                              />
-                              {label}
-                            </label>
-                          ))}
-                        </div>
-                      </fieldset>
-                      <label className="block">
-                        <span className="mb-1.5 block text-sm font-semibold">Describe what you will offer and how you will fulfill orders</span>
-                        <textarea required minLength={20} maxLength={1000} rows={4} value={sellerApplicationForm.description} onChange={(event) => setSellerApplicationForm((current) => ({ ...current, description: event.target.value }))} className="w-full resize-y rounded-xl border border-slate-200 px-4 py-3" />
-                      </label>
-                      <label className="block">
-                        <span className="mb-1.5 block text-sm font-semibold">Additional information <span className="font-normal text-slate-500">(optional)</span></span>
-                        <textarea maxLength={1000} rows={3} value={sellerApplicationForm.additionalInfo} onChange={(event) => setSellerApplicationForm((current) => ({ ...current, additionalInfo: event.target.value }))} className="w-full resize-y rounded-xl border border-slate-200 px-4 py-3" placeholder="Relevant experience, sourcing, or supporting details" />
-                      </label>
-                    </div>
-                    {marketplaceError && <p role="alert" className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-800">{marketplaceError}</p>}
-                    <button type="submit" disabled={sellerApplicationSaving || sellerApplicationForm.categories.length === 0} className="mt-5 min-h-12 w-full rounded-xl bg-primary px-4 py-3 font-bold text-white disabled:opacity-50">
-                      {sellerApplicationSaving ? "Submitting..." : "Submit for review"}
-                    </button>
-                  </form>
-                </div>
-              )}
+              <SellerApplicationDialog
+                isOpen={sellerApplicationOpen}
+                form={sellerApplicationForm}
+                onFormChange={setSellerApplicationForm}
+                onSubmit={submitSellerApplication}
+                onClose={() => setSellerApplicationOpen(false)}
+                isSaving={sellerApplicationSaving}
+                error={marketplaceError}
+              />
 
               {checkoutListing && (
                 <div className="fixed inset-0 z-[60] flex items-end bg-slate-950/50 p-0 sm:items-center sm:justify-center sm:p-4">
