@@ -7,6 +7,7 @@ export const issueOtp = async ({
   hashOtp,
   ttlMinutes,
   cooldownSeconds,
+  recipientEmail,
 }) => {
   const otp = generateOtp();
   const previousToken = await OtpToken.findOne({ user: user._id, purpose });
@@ -17,6 +18,7 @@ export const issueOtp = async ({
         attempts: previousToken.attempts,
         lockUntil: previousToken.lockUntil,
         resendCooldownUntil: previousToken.resendCooldownUntil,
+        recipientEmail: previousToken.recipientEmail,
         verifiedAt: previousToken.verifiedAt,
         usedAt: previousToken.usedAt,
         lastSentAt: previousToken.lastSentAt,
@@ -33,6 +35,7 @@ export const issueOtp = async ({
       attempts: 0,
       lockUntil: null,
       resendCooldownUntil: new Date(Date.now() + cooldownSeconds * 1000),
+      recipientEmail: recipientEmail || user.email,
       verifiedAt: null,
       usedAt: null,
       lastSentAt: new Date(),
@@ -42,7 +45,7 @@ export const issueOtp = async ({
 
   try {
     await sendOtpEmail({
-      to: user.email,
+      to: recipientEmail || user.email,
       otp,
       purpose,
       expiresInMinutes: ttlMinutes,
@@ -65,7 +68,9 @@ export const issueOtp = async ({
       }
     } catch {
       console.error("OTP state rollback failed", {
-        purpose: purpose === "signup" ? "signup" : "reset",
+        purpose: ["signup", "reset", "email_change"].includes(purpose)
+          ? purpose
+          : "unknown",
         code: "OTP_ROLLBACK_FAILED",
       });
     }
@@ -76,7 +81,9 @@ export const issueOtp = async ({
 };
 
 export const logOtpDeliveryError = (purpose, error) => {
-  const safePurpose = purpose === "signup" ? "signup" : "reset";
+  const safePurpose = ["signup", "reset", "email_change"].includes(purpose)
+    ? purpose
+    : "unknown";
   const safeCode =
     typeof error?.code === "string" && /^[A-Z0-9_-]{1,32}$/.test(error.code)
       ? error.code

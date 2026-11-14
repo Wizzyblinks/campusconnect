@@ -6,7 +6,7 @@ export const getMyNotifications = async (req, res) => {
   try {
     const [notifications, unreadCount] = await Promise.all([
       Notification.find({ recipient: req.user._id })
-        .populate("actor", "name profile.avatar")
+        .populate("actor", "name username profile.avatar")
         .sort({ createdAt: -1 })
         .limit(50)
         .lean(),
@@ -55,7 +55,7 @@ export const markNotificationRead = async (req, res) => {
       { $set: { readAt: new Date() } },
       { returnDocument: "after" },
     )
-      .populate("actor", "name profile.avatar")
+      .populate("actor", "name username profile.avatar")
       .lean();
     if (!notification) {
       return res.status(404).json({ message: "Notification not found." });

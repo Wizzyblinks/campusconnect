@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   Activity,
+  CreditCard,
   Newspaper,
   ShoppingBag,
   ShieldAlert,
@@ -20,6 +21,8 @@ const sections = [
   { id: "Content moderation", icon: ShieldAlert },
   { id: "Reports", icon: ShieldAlert },
   { id: "Disputes", icon: ShoppingBag },
+  { id: "Payments", icon: CreditCard },
+  { id: "Seller payouts", icon: CreditCard },
 ];
 
 const emptyNewsForm = {
@@ -54,9 +57,14 @@ function AdminDashboard() {
   const [postPagination, setPostPagination] = useState(null);
   const [listingPagination, setListingPagination] = useState(null);
   const [disputes, setDisputes] = useState([]);
+  const [payments, setPayments] = useState([]);
+  const [payouts, setPayouts] = useState([]);
   const [sellerApplications, setSellerApplications] = useState([]);
   const [sellerApplicationsPage, setSellerApplicationsPage] = useState(1);
   const [sellerApplicationsStatus, setSellerApplicationsStatus] = useState("PENDING");
+  const [sellerApplicationsSearch, setSellerApplicationsSearch] = useState("");
+  const [sellerApplicationsQuery, setSellerApplicationsQuery] = useState("");
+  const [sellerApplicationsCounts, setSellerApplicationsCounts] = useState({ PENDING: 0, APPROVED: 0, REJECTED: 0, SUSPENDED: 0 });
   const [sellerApplicationsPagination, setSellerApplicationsPagination] = useState(null);
   const [sellerApplicationsLoading, setSellerApplicationsLoading] = useState(false);
   const [sellerApplicationSavingId, setSellerApplicationSavingId] = useState("");
@@ -94,6 +102,32 @@ function AdminDashboard() {
     }
   }, []);
 
+  const loadPayments = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const data = await apiRequest("/api/admin/payments");
+      setPayments(data.payments || []);
+    } catch (requestError) {
+      setError(requestError.message || "Could not load payment records.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const loadPayouts = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const data = await apiRequest("/api/admin/payouts");
+      setPayouts(data.payouts || []);
+    } catch (requestError) {
+      setError(requestError.message || "Could not load the seller payout queue.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   const loadSellerApplications = useCallback(async () => {
     setSellerApplicationsLoading(true);
     setError("");
@@ -103,15 +137,17 @@ function AdminDashboard() {
         limit: "20",
         status: sellerApplicationsStatus,
       });
+      if (sellerApplicationsQuery) params.set("search", sellerApplicationsQuery);
       const data = await apiRequest(`/api/admin/seller-applications?${params}`);
       setSellerApplications(data.applications || []);
       setSellerApplicationsPagination(data.pagination || null);
+      setSellerApplicationsCounts(data.counts || { PENDING: 0, APPROVED: 0, REJECTED: 0, SUSPENDED: 0 });
     } catch (requestError) {
       setError(requestError.message || "Could not load seller applications.");
     } finally {
       setSellerApplicationsLoading(false);
     }
-  }, [sellerApplicationsPage, sellerApplicationsStatus]);
+  }, [sellerApplicationsPage, sellerApplicationsStatus, sellerApplicationsQuery]);
 
   const loadUsers = useCallback(async () => {
     setUsersLoading(true);
@@ -198,8 +234,10 @@ function AdminDashboard() {
     if (section === "Reports") loadReports();
     if (section === "Content moderation") loadModeratedContent();
     if (section === "Disputes") loadDisputes();
+    if (section === "Payments") loadPayments();
+    if (section === "Seller payouts") loadPayouts();
     if (section === "Seller applications") loadSellerApplications();
-  }, [authorized, section, loadNews, loadReports, loadUsers, loadDisputes, loadSellerApplications, loadModeratedContent]);
+  }, [authorized, section, loadNews, loadReports, loadUsers, loadDisputes, loadPayments, loadPayouts, loadSellerApplications, loadModeratedContent]);
 
   useEffect(() => {
     setUserPage(1);
@@ -238,11 +276,18 @@ function AdminDashboard() {
 
   async function reviewSellerApplication(application, status) {
     const applicantName = application.seller?.name || "this student";
+    if (!window.confirm(`Confirm ${status.toLowerCase()} for ${applicantName}?`)) return;
     const reviewNote = window.prompt(
-      `Optional note for ${applicantName} (up to 500 characters):`,
+      status === "APPROVED"
+        ? `Optional note for ${applicantName} (up to 500 characters):`
+        : `Reason for ${status.toLowerCase()} ${applicantName} (5 to 500 characters):`,
       application.reviewNote || "",
     );
     if (reviewNote === null) return;
+    if (status !== "APPROVED" && reviewNote.trim().length < 5) {
+      setError("Enter a review reason of at least five characters.");
+      return;
+    }
     setSellerApplicationSavingId(application._id);
     setError("");
     setNotice("");
@@ -529,7 +574,7 @@ function AdminDashboard() {
           </div>
           <label className="flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2.5 sm:max-w-md">
             <Users size={17} className="text-slate-400" />
-            <input value={userSearch} onChange={(event) => setUserSearch(event.target.value)} placeholder="Search name or email" className="w-full text-sm outline-none" />
+            <input value={userSearch} onChange={(event) => setUserSearch(event.target.value)} placeholder="Search name, username, or email" className="w-full text-sm outline-none" />
           </label>
           {usersLoading ? (
             <p className="py-8 text-center text-sm text-slate-500">Loading users...</p>
@@ -543,6 +588,7 @@ function AdminDashboard() {
                     {account.profile?.avatar ? <img src={account.profile.avatar} alt="" className="h-11 w-11 rounded-full object-cover" /> : <span className="flex h-11 w-11 items-center justify-center rounded-full bg-blue-100 font-bold text-blue-700">{account.name?.[0] || "S"}</span>}
                     <div className="min-w-0">
                       <p className="truncate font-bold">{account.name}</p>
+                      {account.username && <p className="truncate text-xs text-slate-500">@{account.username}</p>}
                       <p className="truncate text-xs text-slate-500">{account.email}</p>
                       <p className="mt-1 text-xs text-slate-500">Joined {dateLabel(account.createdAt)} · {account.isVerifiedStudent ? "Verified" : "Unverified"} · {account.isOnline ? "Online" : "Offline"}</p>
                       {account.isRestricted && <p className="mt-1 text-xs text-red-700">Restricted: {account.restrictionReason || "No reason recorded"}</p>}
@@ -596,6 +642,31 @@ function AdminDashboard() {
               </select>
             </label>
           </div>
+          <div className="grid gap-3 sm:grid-cols-3">
+            {[
+              ["Pending", sellerApplicationsCounts.PENDING],
+              ["Approved", sellerApplicationsCounts.APPROVED],
+              ["Rejected", sellerApplicationsCounts.REJECTED],
+            ].map(([label, count]) => (
+              <div key={label} className="rounded-xl bg-slate-50 p-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</p>
+                <p className="mt-1 text-xl font-extrabold">{count}</p>
+              </div>
+            ))}
+          </div>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              setSellerApplicationsPage(1);
+              setSellerApplicationsQuery(sellerApplicationsSearch.trim());
+            }}
+            className="flex flex-col gap-2 sm:flex-row"
+          >
+            <label className="sr-only" htmlFor="seller-application-search">Search applications</label>
+            <input id="seller-application-search" value={sellerApplicationsSearch} onChange={(event) => setSellerApplicationsSearch(event.target.value)} maxLength={100} placeholder="Search applicant, email, username, or store" className="min-h-11 min-w-0 flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+            <button type="submit" className="min-h-11 rounded-lg bg-primary px-4 py-2 text-sm font-bold text-white">Search</button>
+            {sellerApplicationsQuery && <button type="button" onClick={() => { setSellerApplicationsSearch(""); setSellerApplicationsQuery(""); setSellerApplicationsPage(1); }} className="min-h-11 rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold">Clear search</button>}
+          </form>
           {sellerApplicationsLoading ? (
             <p className="py-8 text-center text-sm text-slate-500">Loading seller applications...</p>
           ) : sellerApplications.length === 0 ? (
@@ -610,21 +681,39 @@ function AdminDashboard() {
                       : <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-blue-100 font-bold text-blue-700">{application.seller?.name?.[0] || "S"}</span>}
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
-                        <p className="font-bold">{application.seller?.name || "Student"}</p>
+                        <p className="font-bold">{application.applicantName || application.seller?.name || "Student"}</p>
+                        {application.seller?.username && <span className="text-xs text-slate-500">@{application.seller.username}</span>}
                         <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold">{application.status}</span>
                       </div>
                       <p className="mt-1 break-all text-xs text-slate-500">{application.seller?.email}</p>
+                      <p className="mt-1 text-xs text-slate-600">Phone: {application.applicantPhone || "Not provided"} · Contact: {application.contactEmail || "Not provided"}</p>
+                      {application.contactInfo && <p className="mt-1 break-words text-xs text-slate-600">Additional contact: {application.contactInfo}</p>}
                       <p className="mt-1 text-xs text-slate-500">
                         {application.seller?.isVerifiedStudent ? "Verified student" : "Unverified"} · {application.seller?.isRestricted ? "Restricted" : "Unrestricted"} · Applied {dateLabel(application.createdAt)}
                       </p>
                       <h5 className="mt-3 font-semibold">{application.businessName}</h5>
                       <p className="mt-1 text-xs font-semibold text-blue-700">{(application.categories || []).join(" · ")}</p>
                       <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">{application.description}</p>
+                      {application.additionalInfo && <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-600"><span className="font-semibold">Additional information:</span> {application.additionalInfo}</p>}
                       {application.reviewNote && <p className="mt-2 rounded-lg bg-slate-50 p-3 text-sm text-slate-600">Review note: {application.reviewNote}</p>}
+                      {application.history?.length > 0 && (
+                        <details className="mt-3 rounded-xl border border-slate-200 p-3">
+                          <summary className="cursor-pointer text-sm font-semibold">Application history ({application.history.length})</summary>
+                          <ol className="mt-3 space-y-3">
+                            {application.history.map((entry, index) => (
+                              <li key={`${entry._id || entry.changedAt}-${index}`} className="border-t border-slate-100 pt-3 text-xs">
+                                <p className="font-bold">{entry.status} · {dateLabel(entry.changedAt)}</p>
+                                {entry.businessName && <p className="mt-1">{entry.businessName}{entry.applicantName ? ` · ${entry.applicantName}` : ""}</p>}
+                                {entry.reviewNote && <p className="mt-1 whitespace-pre-wrap text-slate-600">{entry.reviewNote}</p>}
+                              </li>
+                            ))}
+                          </ol>
+                        </details>
+                      )}
                     </div>
                   </div>
                   <div className="flex flex-wrap gap-2 sm:pl-14">
-                    {application.status !== "APPROVED" && (
+                    {application.status === "PENDING" && (
                       <button
                         type="button"
                         disabled={sellerApplicationSavingId === application._id || !application.seller?.isVerifiedStudent || application.seller?.isRestricted}
@@ -634,7 +723,7 @@ function AdminDashboard() {
                         Approve seller
                       </button>
                     )}
-                    {application.status !== "REJECTED" && (
+                    {application.status === "PENDING" && (
                       <button
                         type="button"
                         disabled={sellerApplicationSavingId === application._id}
@@ -644,7 +733,7 @@ function AdminDashboard() {
                         Reject
                       </button>
                     )}
-                    {application.status !== "SUSPENDED" && (
+                    {application.status === "APPROVED" && (
                       <button
                         type="button"
                         disabled={sellerApplicationSavingId === application._id}
@@ -694,6 +783,61 @@ function AdminDashboard() {
             </div>
           )}
         </div>
+      )}
+
+      {section === "Payments" && (
+        <section className="space-y-4 rounded-2xl border border-slate-200 bg-white p-4 sm:p-6">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h4 className="text-lg font-extrabold">Marketplace payments</h4>
+              <p className="mt-1 text-sm text-slate-500">Flutterwave payments and historical Paystack transactions for your campus.</p>
+            </div>
+            <button type="button" onClick={loadPayments} className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold">Refresh</button>
+          </div>
+          {loading ? <p className="py-8 text-center text-sm text-slate-500">Loading payment records...</p> : payments.length === 0 ? <p className="rounded-xl bg-slate-50 p-5 text-center text-sm text-slate-500">No payment records found.</p> : (
+            <div className="divide-y divide-slate-100">
+              {payments.map((payment) => (
+                <article key={payment._id} className="py-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="font-bold">{payment.provider || "PAYSTACK"} · {payment.status}</p>
+                    <p className="font-extrabold">{payment.currency || "NGN"} {Number(payment.amount || 0).toLocaleString()}</p>
+                  </div>
+                  <p className="mt-1 break-all text-xs text-slate-600">Transaction reference: {payment.providerReference || payment.reference}</p>
+                  {payment.providerTransactionId && <p className="mt-1 break-all text-xs text-slate-600">Provider transaction ID: {payment.providerTransactionId}</p>}
+                  <p className="mt-1 text-xs text-slate-500">Order {payment.order?._id || payment.order || "Unavailable"} · {payment.order?.status || "Unknown"} · Buyer {payment.buyer?.name || "Student"} · {dateLabel(payment.paidAt || payment.createdAt)}</p>
+                  <p className="mt-1 text-xs text-slate-500">Refund: {payment.refundStatus || "NONE"}{payment.refundAmount ? ` · ${payment.currency || "NGN"} ${Number(payment.refundAmount).toLocaleString()}` : ""}{payment.refundProviderId ? ` · ${payment.refundProviderId}` : ""}</p>
+                </article>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
+
+      {section === "Seller payouts" && (
+        <section className="space-y-4 rounded-2xl border border-slate-200 bg-white p-4 sm:p-6">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h4 className="text-lg font-extrabold">Seller payout queue</h4>
+              <p className="mt-1 text-sm text-slate-500">Delivery-verified payouts remain pending until an administrator completes the transfer outside Campus Connect and records it in the finance process.</p>
+            </div>
+            <button type="button" onClick={loadPayouts} className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold">Refresh</button>
+          </div>
+          {loading ? <p className="py-8 text-center text-sm text-slate-500">Loading payout queue...</p> : payouts.length === 0 ? <p className="rounded-xl bg-slate-50 p-5 text-center text-sm text-slate-500">No payout records found.</p> : (
+            <div className="divide-y divide-slate-100">
+              {payouts.map((payout) => (
+                <article key={payout._id} className="py-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="font-bold">{payout.seller?.name || "Seller"} · {payout.provider || "PAYSTACK"} · {payout.status}</p>
+                    <p className="font-extrabold">NGN {Number(payout.amount || 0).toLocaleString()}</p>
+                  </div>
+                  <p className="mt-1 break-all text-xs text-slate-600">Payout reference: {payout.reference}</p>
+                  <p className="mt-1 text-xs text-slate-500">Order {payout.order?._id || payout.order || "Unavailable"} · {payout.order?.status || "Unknown"} · {dateLabel(payout.createdAt)}</p>
+                  {payout.failureReason && <p className="mt-2 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">{payout.failureReason}</p>}
+                </article>
+              ))}
+            </div>
+          )}
+        </section>
       )}
 
       {section === "Content moderation" && (

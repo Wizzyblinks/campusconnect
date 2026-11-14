@@ -46,7 +46,7 @@ export const createNotification = async ({
     throw new Error("The notification could not be saved.");
   }
   const populatedNotification = await Notification.findById(notification._id)
-    .populate("actor", "name profile.avatar")
+    .populate("actor", "name username profile.avatar")
     .lean();
 
   emitNotification(io, recipient, populatedNotification);

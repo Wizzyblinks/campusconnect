@@ -3,6 +3,26 @@ import Institution from "../models/Institution.js";
 import bcrypt from "bcrypt";
 import cloudinary, { isCloudinaryConfigured } from "../config/cloudinary.js";
 import { getPostMediaKind } from "../services/postMediaValidation.js";
+import OtpToken from "../models/OtpToken.js";
+import { sendOtpEmail } from "../services/emailService.js";
+import {
+  issueOtp,
+  logOtpDeliveryError,
+} from "../services/otpDeliveryService.js";
+import {
+  enforceOtpRateLimit,
+  generateOtp,
+  hashOtp,
+  normalizeEmail,
+  otpMatches,
+  MAX_OTP_ATTEMPTS,
+  OTP_LOCK_MINUTES,
+  OTP_TTL_MINUTES,
+  RESEND_COOLDOWN_SECONDS,
+} from "../services/otpService.js";
+import { isValidUsername, normalizeUsername } from "../services/usernames.js";
+
+const isDuplicateKeyError = (error) => error?.code === 11000;
 
 const matchesAvatarMimeType = (buffer, mimeType) => {
   if (getPostMediaKind(buffer) !== "image") return false;
@@ -63,7 +83,7 @@ export const getProfile = async (req, res) => {
 export const updateProfile = async (req, res) => {
   try {
     const allowedFields = new Set([
-      "name", "phone", "department", "level", "bio", "privacy",
+      "name", "username", "phone", "department", "level", "bio", "privacy",
     ]);
     if (Object.keys(req.body).some((field) => !allowedFields.has(field))) {
       return res.status(400).json({ message: "Some profile information can't be changed here." });
@@ -96,6 +116,26 @@ export const updateProfile = async (req, res) => {
         user.privacy = { ...user.privacy?.toObject?.(), ...value };
         continue;
       }
+      if (field === "username") {
+        if (typeof value !== "string") {
+          return res.status(400).json({ message: "Choose a valid username." });
+        }
+        const username = normalizeUsername(value);
+        if (!isValidUsername(username)) {
+          return res.status(400).json({
+            message: "Username must be 3 to 24 characters, start and end with a letter or number, and contain only letters, numbers, periods, or underscores.",
+          });
+        }
+        const existingUsername = await User.exists({
+          username,
+          _id: { $ne: user._id },
+        });
+        if (existingUsername) {
+          return res.status(409).json({ message: "That username is already taken." });
+        }
+        user.username = username;
+        continue;
+      }
       if (typeof value !== "string" || value.trim().length > maxLengths[field]) {
         return res.status(400).json({ message: `Enter a valid ${field} (up to ${maxLengths[field]} characters).` });
       }
@@ -113,6 +153,7 @@ export const updateProfile = async (req, res) => {
       user: {
         id: user._id,
         name: user.name,
+        username: user.username,
         email: user.email,
         institution: user.institution,
         campus: user.campus,
@@ -121,6 +162,9 @@ export const updateProfile = async (req, res) => {
       },
     });
   } catch (error) {
+    if (isDuplicateKeyError(error) && error.keyPattern?.username) {
+      return res.status(409).json({ message: "That username is already taken." });
+    }
     console.error("Update profile failed:", error.message);
     res.status(500).json({
       message: "Failed to update profile",
@@ -192,6 +236,7 @@ export const uploadProfileAvatar = async (req, res) => {
       user: {
         id: user._id,
         name: user.name,
+        username: user.username,
         email: user.email,
         institution: user.institution,
         campus: user.campus,
@@ -220,16 +265,28 @@ export const uploadProfileAvatar = async (req, res) => {
 
 export const changePassword = async (req, res) => {
   try {
-    const { currentPassword, newPassword } = req.body;
+    if (Object.keys(req.body || {}).some((field) =>
+      !["currentPassword", "newPassword", "confirmPassword"].includes(field),
+    )) {
+      return res.status(400).json({ message: "Only password fields can be changed here." });
+    }
+    const { currentPassword, newPassword, confirmPassword } = req.body || {};
     if (typeof currentPassword !== "string" ||
         typeof newPassword !== "string" ||
+        typeof confirmPassword !== "string" ||
+        confirmPassword !== newPassword ||
         newPassword.length < 8 ||
-        newPassword.length > 128) {
-      return res.status(400).json({ message: "Enter your current password and a new password of at least 8 characters." });
+        newPassword.length > 128 ||
+        !/[A-Za-z]/.test(newPassword) ||
+        !/\d/.test(newPassword)) {
+      return res.status(400).json({ message: "Enter your current password and matching new passwords of 8 to 128 characters, including at least one letter and one number." });
     }
     const user = await User.findById(req.user._id).select("+password");
     if (!user || !(await bcrypt.compare(currentPassword, user.password))) {
       return res.status(400).json({ message: "Your current password isn't correct." });
+    }
+    if (await bcrypt.compare(newPassword, user.password)) {
+      return res.status(400).json({ message: "Choose a new password different from your current password." });
     }
     user.password = await bcrypt.hash(newPassword, 10);
     user.tokenVersion = (user.tokenVersion || 0) + 1;
@@ -238,5 +295,173 @@ export const changePassword = async (req, res) => {
   } catch (error) {
     console.error("Change password failed:", error.message);
     return res.status(500).json({ message: "We couldn't update your password. Please try again." });
+  }
+};
+
+export const requestEmailChange = async (req, res) => {
+  const { email, currentPassword } = req.body || {};
+  const normalizedEmail = normalizeEmail(email);
+  if (
+    Object.keys(req.body || {}).some((field) => !["email", "currentPassword"].includes(field)) ||
+    !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail) ||
+    typeof currentPassword !== "string" ||
+    currentPassword.length === 0
+  ) {
+    return res.status(400).json({ message: "Provide a valid new email address and your current password." });
+  }
+
+  const rateLimit = enforceOtpRateLimit(normalizedEmail, "email_change");
+  if (!rateLimit.allowed) {
+    return res.status(429).json({
+      message: "Too many email verification requests. Please try again shortly.",
+      retryAfterSeconds: Math.ceil(rateLimit.retryAfterMs / 1000),
+    });
+  }
+
+  try {
+    const user = await User.findById(req.user._id).select("+password");
+    if (!user || !(await bcrypt.compare(currentPassword, user.password))) {
+      return res.status(400).json({ message: "Your current password isn't correct." });
+    }
+    if (normalizedEmail === user.email) {
+      return res.status(400).json({ message: "That is already your current email address." });
+    }
+    if (await User.exists({ email: normalizedEmail, _id: { $ne: user._id } })) {
+      return res.status(409).json({ message: "That email address is already registered." });
+    }
+
+    const previousOtp = await OtpToken.findOne({
+      user: user._id,
+      purpose: "email_change",
+    });
+    if (previousOtp?.lockUntil && previousOtp.lockUntil > new Date()) {
+      return res.status(429).json({
+        message: "Too many incorrect verification attempts. Please try again later.",
+      });
+    }
+    if (previousOtp?.resendCooldownUntil && previousOtp.resendCooldownUntil > new Date()) {
+      return res.status(429).json({
+        message: "Please wait before requesting another verification code.",
+        retryAfterSeconds: Math.ceil((previousOtp.resendCooldownUntil - Date.now()) / 1000),
+      });
+    }
+
+    const previousPendingEmail = user.pendingEmail;
+    user.pendingEmail = normalizedEmail;
+    await user.save();
+
+    try {
+      await issueOtp({
+        user,
+        purpose: "email_change",
+        recipientEmail: normalizedEmail,
+        OtpToken,
+        sendOtpEmail,
+        generateOtp,
+        hashOtp,
+        ttlMinutes: OTP_TTL_MINUTES,
+        cooldownSeconds: RESEND_COOLDOWN_SECONDS,
+      });
+    } catch (error) {
+      user.pendingEmail = previousPendingEmail;
+      await user.save();
+      logOtpDeliveryError("email_change", error);
+      return res.status(502).json({
+        message: "We couldn't send a verification code to that address. Please try again.",
+      });
+    }
+
+    return res.json({
+      message: "A verification code has been sent to your new email address.",
+      pendingEmail: normalizedEmail,
+    });
+  } catch (error) {
+    console.error("Email change request failed:", error.message);
+    return res.status(500).json({ message: "We couldn't request an email change right now." });
+  }
+};
+
+export const verifyEmailChange = async (req, res) => {
+  const { otp } = req.body || {};
+  if (
+    Object.keys(req.body || {}).some((field) => field !== "otp") ||
+    typeof otp !== "string" ||
+    !/^\d{6}$/.test(otp)
+  ) {
+    return res.status(400).json({ message: "Enter the six-digit verification code." });
+  }
+
+  try {
+    const user = await User.findById(req.user._id);
+    if (!user?.pendingEmail) {
+      return res.status(400).json({ message: "There is no pending email change to verify." });
+    }
+
+    const rateLimit = enforceOtpRateLimit(user.pendingEmail, "email_change", "verify");
+    if (!rateLimit.allowed) {
+      return res.status(429).json({
+        message: "Too many verification attempts. Please wait before trying again.",
+        retryAfterSeconds: Math.ceil(rateLimit.retryAfterMs / 1000),
+      });
+    }
+
+    const otpToken = await OtpToken.findOne({
+      user: user._id,
+      purpose: "email_change",
+    });
+    if (!otpToken || otpToken.usedAt || otpToken.recipientEmail !== user.pendingEmail) {
+      return res.status(400).json({ message: "Verification code is invalid or expired." });
+    }
+    if (otpToken.lockUntil && otpToken.lockUntil > new Date()) {
+      return res.status(429).json({ message: "Too many incorrect attempts. Please try again later." });
+    }
+    if (!otpToken.expiresAt || otpToken.expiresAt <= new Date()) {
+      await OtpToken.deleteOne({ _id: otpToken._id });
+      return res.status(400).json({ message: "Verification code expired. Request a new one." });
+    }
+    if (!otpMatches(String(otp), otpToken.otpHash)) {
+      otpToken.attempts = (otpToken.attempts || 0) + 1;
+      if (otpToken.attempts >= MAX_OTP_ATTEMPTS) {
+        otpToken.lockUntil = new Date(Date.now() + OTP_LOCK_MINUTES * 60 * 1000);
+        otpToken.attempts = 0;
+      }
+      await otpToken.save();
+      return res.status(400).json({ message: "Invalid verification code." });
+    }
+    if (await User.exists({ email: user.pendingEmail, _id: { $ne: user._id } })) {
+      user.pendingEmail = null;
+      await user.save();
+      return res.status(409).json({ message: "That email address is already registered." });
+    }
+
+    user.email = user.pendingEmail;
+    user.pendingEmail = null;
+    user.emailVerified = true;
+    user.emailVerifiedAt = new Date();
+    user.tokenVersion = (user.tokenVersion || 0) + 1;
+    await user.save();
+
+    otpToken.usedAt = new Date();
+    otpToken.verifiedAt = new Date();
+    otpToken.expiresAt = new Date();
+    await otpToken.save();
+
+    return res.json({
+      message: "Your email address has been updated. Please log in again.",
+      user: {
+        id: user._id,
+        name: user.name,
+        username: user.username,
+        email: user.email,
+        profile: user.profile,
+        privacy: user.privacy,
+      },
+    });
+  } catch (error) {
+    if (isDuplicateKeyError(error) && error.keyPattern?.email) {
+      return res.status(409).json({ message: "That email address is already registered." });
+    }
+    console.error("Email change verification failed:", error.message);
+    return res.status(500).json({ message: "We couldn't verify the new email address." });
   }
 };

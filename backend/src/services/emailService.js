@@ -13,7 +13,9 @@ const getEmailConfig = () => {
 };
 
 export const logEmailDeliveryFailure = (purpose, error) => {
-  const safePurpose = purpose === "signup" ? "signup" : "reset";
+  const safePurpose = ["signup", "reset", "email_change"].includes(purpose)
+    ? purpose
+    : "unknown";
 
   const safeCode =
     typeof error?.code === "string" && /^[A-Z0-9_-]{1,32}$/.test(error.code)
@@ -35,10 +37,16 @@ const buildEmailHtml = ({ purpose, otp, expiresInMinutes }) => {
   const title =
     purpose === "signup"
       ? "Verify your Campus Connect account"
+      : purpose === "email_change"
+        ? "Verify your new Campus Connect email"
       : "Reset your Campus Connect password";
 
   const actionText =
-    purpose === "signup" ? "verify your email address" : "reset your password";
+    purpose === "signup"
+      ? "verify your email address"
+      : purpose === "email_change"
+        ? "confirm your new email address"
+        : "reset your password";
 
   return `
     <!DOCTYPE html>
@@ -104,6 +112,8 @@ export const sendOtpEmail = async ({ to, otp, purpose, expiresInMinutes }) => {
   const subject =
     purpose === "signup"
       ? "Verify your Campus Connect account"
+      : purpose === "email_change"
+        ? "Verify your new Campus Connect email"
       : "Campus Connect password reset code";
 
   const text = [
@@ -111,7 +121,9 @@ export const sendOtpEmail = async ({ to, otp, purpose, expiresInMinutes }) => {
     "",
     purpose === "signup"
       ? "Use this code to verify your email address:"
-      : "Use this code to reset your password:",
+      : purpose === "email_change"
+        ? "Use this code to confirm your new email address:"
+        : "Use this code to reset your password:",
     `Code: ${otp}`,
     `This code expires in ${expiresInMinutes} minutes.`,
     "Do not share this code with anyone.",

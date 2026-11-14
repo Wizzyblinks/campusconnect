@@ -98,8 +98,8 @@ export const getMyOrders = async (req, res) => {
     const orders = await Order.find({
       $or: [{ buyer: req.user._id }, { seller: req.user._id }],
     })
-      .populate("buyer", "name email profile.avatar")
-      .populate("seller", "name email profile.avatar")
+      .populate("buyer", "name username email profile.avatar")
+      .populate("seller", "name username email profile.avatar")
       .populate("listing", "title price images category")
       .sort({ createdAt: -1 });
 
@@ -118,8 +118,8 @@ export const getMyOrders = async (req, res) => {
 export const getOrderById = async (req, res) => {
   try {
     const order = await Order.findById(req.params.id)
-      .populate("buyer", "name email profile.avatar")
-      .populate("seller", "name email profile.avatar")
+      .populate("buyer", "name username email profile.avatar")
+      .populate("seller", "name username email profile.avatar")
       .populate("listing", "title price images category");
 
     if (!order) {

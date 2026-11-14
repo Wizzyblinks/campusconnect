@@ -5,6 +5,8 @@ import {
   getAdminListings,
   getAdminUsers,
   getAdminDisputes,
+  getAdminPayments,
+  getAdminPayouts,
   getMessageReports,
   getPostReports,
   reviewMessageReport,
@@ -37,5 +39,7 @@ router.patch("/reports/messages/:id", reviewMessageReport);
 router.get("/reports/posts", getPostReports);
 router.patch("/reports/posts/:id", reviewPostReport);
 router.get("/disputes", getAdminDisputes);
+router.get("/payments", getAdminPayments);
+router.get("/payouts", getAdminPayouts);
 
 export default router;

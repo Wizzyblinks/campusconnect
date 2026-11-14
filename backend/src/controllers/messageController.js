@@ -38,10 +38,13 @@ export const searchMessageRecipients = async (req, res) => {
       _id: { $ne: req.user._id },
       isRestricted: { $ne: true },
       role: "student",
-      name: { $regex: escaped, $options: "i" },
+      $or: [
+        { name: { $regex: escaped, $options: "i" } },
+        { username: { $regex: escaped, $options: "i" } },
+      ],
     };
     const candidates = await User.find(filters)
-      .select("name profile.avatar isVerifiedStudent isOnline")
+      .select("name username profile.avatar isVerifiedStudent isOnline")
       .sort({ name: 1 })
       .limit(20)
       .lean();
@@ -447,7 +450,7 @@ export const getMyConversations = async (req, res) => {
     const conversations = await Conversation.find({
       participants: req.user._id,
     })
-      .populate("participants", "name profile.avatar isVerifiedStudent isOnline")
+      .populate("participants", "name username profile.avatar isVerifiedStudent isOnline")
       .populate({
         path: "lastMessage",
         select: "message sender receiver createdAt isRead",
@@ -494,7 +497,7 @@ export const getConversationMessages = async (req, res) => {
     );
     const messages = await DirectMessage.find({ conversation: conversationId })
       .select("conversation sender receiver message messageType isRead createdAt clientMessageId")
-      .populate("sender", "name profile.avatar")
+      .populate("sender", "name username profile.avatar")
       .sort({ createdAt: -1 })
       .limit(200)
       .lean();

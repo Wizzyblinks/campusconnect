@@ -3,7 +3,7 @@ import Payout from "../models/Payout.js";
 import { listNigerianBanks, saveSellerPayoutAccount } from "../services/payoutService.js";
 
 export const getBanks = async (req, res) => {
-  try { res.json({ banks: await listNigerianBanks() }); } catch (error) { res.status(502).json({ message: error.message }); }
+  try { res.json({ banks: await listNigerianBanks() }); } catch (error) { res.status(error.statusCode || 502).json({ message: error.message }); }
 };
 
 export const savePayoutAccount = async (req, res) => {
@@ -11,7 +11,7 @@ export const savePayoutAccount = async (req, res) => {
     const user = await User.findById(req.user._id);
     const payoutAccount = await saveSellerPayoutAccount(user, req.body);
     res.json({ message: "Payout account verified and saved", payoutAccount });
-  } catch (error) { res.status(400).json({ message: error.message }); }
+  } catch (error) { res.status(error.statusCode || 400).json({ message: error.message }); }
 };
 
 export const getMyPayouts = async (req, res) => {

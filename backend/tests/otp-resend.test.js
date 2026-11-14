@@ -120,6 +120,26 @@ test("password-reset purpose remains separate from signup OTP state", async () =
     sendOtpEmail: async ({ purpose }) => assert.equal(purpose, "reset"),
   });
 
+  test("email-change OTP is stored for and delivered to the pending address", async () => {
+    process.env.JWT_SECRET = "test-only-secret";
+    const model = makeOtpModel();
+    let mailedTo;
+    await issue({
+      model,
+      otp: "618205",
+      purpose: "email_change",
+      recipientEmail: "new-address@example.com",
+      sendOtpEmail: async ({ to, purpose }) => {
+        mailedTo = to;
+        assert.equal(purpose, "email_change");
+      },
+    });
+
+    assert.equal(mailedTo, "new-address@example.com");
+    assert.equal(model.token("email_change").recipientEmail, "new-address@example.com");
+    assert.equal(otpMatches("618205", model.token("email_change").otpHash), true);
+  });
+
   assert.equal(model.token("reset").purpose, "reset");
   assert.equal(model.token("signup").otpHash, existingSignupHash);
   assert.notEqual(model.token("reset").otpHash, existingSignupHash);

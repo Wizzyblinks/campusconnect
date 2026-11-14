@@ -7,6 +7,12 @@ const marketplaceListingSchema = new mongoose.Schema(
       ref: "User",
       required: true,
     },
+    businessName: {
+      type: String,
+      trim: true,
+      maxlength: 100,
+      default: "",
+    },
 
     title: {
       type: String,

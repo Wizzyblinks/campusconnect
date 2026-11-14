@@ -1,1 +1,1 @@
-export const PUBLIC_PROFILE_FIELDS = "name profile.avatar";
+export const PUBLIC_PROFILE_FIELDS = "name username profile.avatar";

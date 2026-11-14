@@ -95,6 +95,7 @@ const normalizePost = (post, institutionLabel = "Campus Connect Student") => {
     id: post._id,
     authorId: String(author._id || author),
     name,
+    username: author.username || "",
     initials: name.split(" ").filter(Boolean).slice(0, 2).map((part) => part[0].toUpperCase()).join("") || "ST",
     university: institutionLabel,
     time: post.createdAt ? new Date(post.createdAt).toLocaleString() : "Just now",
@@ -126,8 +127,13 @@ function App() {
   const [profileSaving, setProfileSaving] = useState(false);
   const [profileNotice, setProfileNotice] = useState("");
   const [profileError, setProfileError] = useState("");
-  const [passwordForm, setPasswordForm] = useState({ currentPassword: "", newPassword: "" });
+  const [passwordForm, setPasswordForm] = useState({ currentPassword: "", newPassword: "", confirmPassword: "" });
   const [passwordSaving, setPasswordSaving] = useState(false);
+  const [emailChangeForm, setEmailChangeForm] = useState({ email: "", currentPassword: "", otp: "" });
+  const [emailChangeSaving, setEmailChangeSaving] = useState(false);
+  const [emailChangeVerifying, setEmailChangeVerifying] = useState(false);
+  const [emailChangeNotice, setEmailChangeNotice] = useState("");
+  const [emailChangeError, setEmailChangeError] = useState("");
   const [selectedSearchResult, setSelectedSearchResult] = useState(null);
   const [profileMessageRecipientId, setProfileMessageRecipientId] = useState("");
   const [profileReturnPage, setProfileReturnPage] = useState("");
@@ -511,17 +517,20 @@ function App() {
   const [sellerApplicationSaving, setSellerApplicationSaving] = useState(false);
   const [sellerApplicationForm, setSellerApplicationForm] = useState({
     businessName: "",
+    applicantName: "",
+    applicantPhone: "",
+    contactEmail: "",
+    contactInfo: "",
+    additionalInfo: "",
     categories: [],
     description: "",
   });
   const [editingListingId, setEditingListingId] = useState("");
   const [listingActionId, setListingActionId] = useState("");
   const [ordersLoading, setOrdersLoading] = useState(false);
-  const [payoutSetupOpen, setPayoutSetupOpen] = useState(false);
-  const [banks, setBanks] = useState([]);
-  const [payoutForm, setPayoutForm] = useState({ accountNumber: "", bankCode: "" });
   const [deliveryOtpInputs, setDeliveryOtpInputs] = useState({});
   const [marketplaceSubmitting, setMarketplaceSubmitting] = useState(false);
+  const [paymentRetryOrderId, setPaymentRetryOrderId] = useState("");
   const [listingForm, setListingForm] = useState({
     title: "",
     description: "",
@@ -618,7 +627,16 @@ function App() {
           application: data.application,
         });
         setSellerApplicationOpen(false);
-        setSellerApplicationForm({ businessName: "", categories: [], description: "" });
+        setSellerApplicationForm({
+          businessName: "",
+          applicantName: user?.name || "",
+          applicantPhone: user?.profile?.phone || "",
+          contactEmail: user?.email || "",
+          contactInfo: "",
+          additionalInfo: "",
+          categories: [],
+          description: "",
+        });
         setMarketplaceNotice(data.message || "Your seller application was submitted.");
       } catch (error) {
         setMarketplaceError(error.message || "We couldn't submit your seller application.");
@@ -654,33 +672,6 @@ function App() {
       loadOrders();
     } catch (error) {
       setMarketplaceError(error.message || "Could not verify the delivery code.");
-    }
-  }
-
-  async function openPayoutSetup() {
-    setPayoutSetupOpen(true);
-    try {
-      const data = await apiRequest("/api/payouts/banks");
-      setBanks(Array.isArray(data.banks) ? data.banks : []);
-    } catch (error) {
-      setMarketplaceError(error.message || "Could not load the bank list.");
-    }
-  }
-
-  async function savePayoutAccount(event) {
-    event.preventDefault();
-    setMarketplaceSubmitting(true);
-    try {
-      const data = await apiRequest("/api/payouts/account", {
-        method: "PUT",
-        body: JSON.stringify(payoutForm),
-      });
-      setMarketplaceNotice(data.message);
-      setPayoutSetupOpen(false);
-    } catch (error) {
-      setMarketplaceError(error.message || "Could not save payout account.");
-    } finally {
-      setMarketplaceSubmitting(false);
     }
   }
 
@@ -759,27 +750,41 @@ function App() {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const reference = params.get("reference");
-
-    if (!user || params.get("payment") !== "success" || !reference) return;
+    const reference = params.get("tx_ref") || params.get("reference");
+    const transactionId = params.get("transaction_id");
+    const status = (params.get("status") || params.get("payment") || "").toLowerCase();
+    if (!reference || !["successful", "success", "failed", "cancelled", "canceled"].includes(status)) return;
 
     let cancelled = false;
     async function confirmReturnedPayment() {
+      if (!user) return;
       setActivePage("Marketplace");
-      setMarketplaceNotice("Confirming your payment...");
+      setMarketplaceError("");
+      setMarketplaceNotice(status === "successful" || status === "success" ? "Confirming your payment with Flutterwave..." : "Checking the payment status with Flutterwave...");
       try {
-        const data = await apiRequest("/api/payments/confirm", {
-          method: "POST",
-          body: JSON.stringify({ reference }),
-        });
+        const data = transactionId
+          ? await apiRequest("/api/payments/confirm", {
+            method: "POST",
+            body: JSON.stringify({ reference, transactionId }),
+          })
+          : await apiRequest(`/api/payments/reference/${encodeURIComponent(reference)}`);
         if (!cancelled) {
-          setMarketplaceNotice(data.message || "Payment confirmed successfully.");
-          loadOrders();
+          const paid = data.order?.paymentStatus === "PAID" || data.payment?.status === "SUCCESS";
+          setMarketplaceNotice(paid
+            ? data.message || "Payment confirmed successfully."
+            : status === "failed" || status === "cancelled" || status === "canceled"
+              ? "Payment was not completed. You can retry it from your orders."
+              : data.message || "Payment is still being verified. Refresh your orders shortly.");
+          if (!paid && (status === "failed" || status === "cancelled" || status === "canceled")) setMarketplaceError("");
+          await loadOrders();
         }
       } catch (error) {
-        if (!cancelled) setMarketplaceError(error.message || "Could not confirm payment.");
+        if (!cancelled) {
+          setMarketplaceError(error.message || "Could not confirm payment.");
+          setMarketplaceNotice("");
+        }
       } finally {
-        window.history.replaceState({}, "", window.location.pathname);
+        window.history.replaceState({}, "", window.location.pathname + window.location.hash);
       }
     }
     confirmReturnedPayment();
@@ -935,20 +940,37 @@ function App() {
       });
       const paymentData = await apiRequest("/api/payments/initialize", {
         method: "POST",
-        body: JSON.stringify({
-          orderId: orderData.order._id,
-          callbackUrl: `${window.location.origin}${window.location.pathname}?payment=success`,
-        }),
+        body: JSON.stringify({ orderId: orderData.order._id }),
       });
 
-      if (!paymentData.payment?.authorizationUrl) {
+      if (!paymentData.checkoutUrl) {
         throw new Error("The payment provider did not return a checkout link.");
       }
 
-      window.location.assign(paymentData.payment.authorizationUrl);
+      setMarketplaceNotice("Redirecting to secure Flutterwave checkout...");
+      window.location.assign(paymentData.checkoutUrl);
     } catch (error) {
       setMarketplaceError(error.message || "Could not start checkout.");
       setMarketplaceSubmitting(false);
+    }
+  }
+
+  async function retryOrderPayment(orderId) {
+    if (!orderId || paymentRetryOrderId) return;
+    setPaymentRetryOrderId(orderId);
+    setMarketplaceError("");
+    setMarketplaceNotice("");
+    try {
+      const data = await apiRequest("/api/payments/initialize", {
+        method: "POST",
+        body: JSON.stringify({ orderId }),
+      });
+      if (!data.checkoutUrl) throw new Error("Flutterwave did not provide a checkout link.");
+      setMarketplaceNotice("Redirecting to secure Flutterwave checkout...");
+      window.location.assign(data.checkoutUrl);
+    } catch (error) {
+      setMarketplaceError(error.message || "Could not retry payment.");
+      setPaymentRetryOrderId("");
     }
   }
 
@@ -1093,13 +1115,65 @@ function App() {
         method: "PATCH",
         body: JSON.stringify(passwordForm),
       });
-      setPasswordForm({ currentPassword: "", newPassword: "" });
+      setPasswordForm({ currentPassword: "", newPassword: "", confirmPassword: "" });
       setProfileNotice(data.message || "Password updated. Please log in again.");
       window.setTimeout(handleLogout, 1500);
     } catch (error) {
       setProfileError(error.message || "We couldn't update your password.");
     } finally {
       setPasswordSaving(false);
+    }
+  }
+
+  async function requestEmailChange(event) {
+    event.preventDefault();
+    if (emailChangeSaving) return;
+    setEmailChangeSaving(true);
+    setEmailChangeError("");
+    setEmailChangeNotice("");
+    try {
+      const data = await apiRequest("/api/profile/email-change", {
+        method: "POST",
+        body: JSON.stringify({
+          email: emailChangeForm.email,
+          currentPassword: emailChangeForm.currentPassword,
+        }),
+      });
+      const updatedUser = { ...user, pendingEmail: data.pendingEmail };
+      setUser(updatedUser);
+      localStorage.setItem("user", JSON.stringify(updatedUser));
+      setEmailChangeForm((current) => ({ ...current, currentPassword: "" }));
+      setEmailChangeNotice(data.message || "Check your new email for a verification code.");
+    } catch (error) {
+      setEmailChangeError(error.message || "We couldn't request an email change.");
+    } finally {
+      setEmailChangeSaving(false);
+    }
+  }
+
+  async function verifyEmailChange(event) {
+    event.preventDefault();
+    if (emailChangeVerifying) return;
+    setEmailChangeVerifying(true);
+    setEmailChangeError("");
+    setEmailChangeNotice("");
+    try {
+      const data = await apiRequest("/api/profile/email-change/verify", {
+        method: "POST",
+        body: JSON.stringify({ otp: emailChangeForm.otp }),
+      });
+      setUser((current) => {
+        const updatedUser = { ...current, ...data.user, pendingEmail: null };
+        localStorage.setItem("user", JSON.stringify(updatedUser));
+        return updatedUser;
+      });
+      setEmailChangeForm({ email: "", currentPassword: "", otp: "" });
+      setEmailChangeNotice(data.message || "Your email has been updated.");
+      window.setTimeout(handleLogout, 1500);
+    } catch (error) {
+      setEmailChangeError(error.message || "We couldn't verify the new email address.");
+    } finally {
+      setEmailChangeVerifying(false);
     }
   }
 
@@ -2705,6 +2779,7 @@ function App() {
                       </div>
                       <div className="pb-1">
                         <h3 className="text-xl font-extrabold">{fullName}</h3>
+                            {user.username && <p className="mt-1 text-sm text-slate-500">@{user.username}</p>}
                         <p className="mt-1 text-sm capitalize text-slate-500">
                           {user.role || "Student"}
                         </p>
@@ -2712,10 +2787,7 @@ function App() {
                     </div>
                     <button
                       type="button"
-                      onClick={() => {
-                        setActivePage("Profile");
-                        window.setTimeout(() => document.getElementById("profile-settings")?.scrollIntoView({ behavior: "smooth" }), 0);
-                      }}
+                      onClick={() => setActivePage("Settings")}
                       className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
                     >
                       <Settings size={16} className="mr-2 inline" />
@@ -2836,30 +2908,12 @@ function App() {
                   </div>
                 )}
               </section>
-              <section id="profile-settings" className="rounded-3xl border border-slate-200 bg-white p-5 sm:p-7">
-                <h3 className="text-lg font-extrabold">Profile and privacy settings</h3>
-                <p className="mt-1 text-sm text-slate-500">Choose what campus students can discover and edit the details shown on your profile.</p>
-                {profileNotice && <p role="status" className="mt-4 rounded-xl bg-emerald-50 p-3 text-sm text-emerald-800">{profileNotice}</p>}
-                {profileError && <p role="alert" className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-800">{profileError}</p>}
-                <form onSubmit={saveProfileSettings} className="mt-5 grid gap-4 sm:grid-cols-2">
-                  <label><span className="mb-1.5 block text-sm font-semibold">Display name</span><input name="name" required maxLength={80} defaultValue={user.name || ""} className="w-full rounded-xl border border-slate-200 px-4 py-3" /></label>
-                  <label><span className="mb-1.5 block text-sm font-semibold">Phone</span><input name="phone" maxLength={30} defaultValue={user.profile?.phone || ""} className="w-full rounded-xl border border-slate-200 px-4 py-3" /></label>
-                  <label><span className="mb-1.5 block text-sm font-semibold">Department</span><input name="department" maxLength={100} defaultValue={user.profile?.department || ""} className="w-full rounded-xl border border-slate-200 px-4 py-3" /></label>
-                  <label><span className="mb-1.5 block text-sm font-semibold">Level</span><input name="level" maxLength={50} defaultValue={user.profile?.level || ""} className="w-full rounded-xl border border-slate-200 px-4 py-3" /></label>
-                  <label className="sm:col-span-2"><span className="mb-1.5 block text-sm font-semibold">Biography</span><textarea name="bio" maxLength={300} rows={3} defaultValue={user.profile?.bio || ""} className="w-full rounded-xl border border-slate-200 px-4 py-3" /></label>
-                  <label><span className="mb-1.5 block text-sm font-semibold">Who can view your profile?</span><select name="profileVisibility" defaultValue={user.privacy?.profileVisibility || "campus"} className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3"><option value="public">All students</option><option value="campus">My campus</option><option value="private">Only me</option></select></label>
-                  <label><span className="mb-1.5 block text-sm font-semibold">Default post visibility</span><select name="defaultPostVisibility" defaultValue={user.privacy?.defaultPostVisibility || "campus"} className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3"><option value="public">All students</option><option value="campus">My campus</option><option value="private">Only me</option></select></label>
-                  <label className="sm:col-span-2 flex items-center gap-3 text-sm"><input name="discoverable" type="checkbox" defaultChecked={user.privacy?.discoverable !== false} className="h-4 w-4" />Allow eligible students to find my profile in discovery.</label>
-                  <button type="submit" disabled={profileSaving} className="rounded-xl bg-blue-700 px-5 py-3 text-sm font-bold text-white disabled:opacity-50 sm:col-span-2">{profileSaving ? "Saving..." : "Save profile settings"}</button>
-                </form>
-                <form onSubmit={changeAccountPassword} className="mt-8 border-t border-slate-100 pt-6">
-                  <h4 className="font-bold">Change password</h4>
-                  <div className="mt-4 grid gap-4 sm:grid-cols-2">
-                    <label><span className="mb-1.5 block text-sm font-semibold">Current password</span><input required type="password" autoComplete="current-password" value={passwordForm.currentPassword} onChange={(event) => setPasswordForm((current) => ({ ...current, currentPassword: event.target.value }))} className="w-full rounded-xl border border-slate-200 px-4 py-3" /></label>
-                    <label><span className="mb-1.5 block text-sm font-semibold">New password (at least 8 characters)</span><input required minLength={8} maxLength={128} type="password" autoComplete="new-password" value={passwordForm.newPassword} onChange={(event) => setPasswordForm((current) => ({ ...current, newPassword: event.target.value }))} className="w-full rounded-xl border border-slate-200 px-4 py-3" /></label>
-                  </div>
-                  <button type="submit" disabled={passwordSaving} className="mt-4 rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold disabled:opacity-50">{passwordSaving ? "Updating..." : "Update password"}</button>
-                </form>
+              <section className="rounded-3xl border border-slate-200 bg-white p-5 sm:p-7">
+                <h3 className="text-lg font-extrabold">Account and profile settings</h3>
+                <p className="mt-1 text-sm text-slate-500">Manage your username, personal details, email, password, and profile picture from Settings.</p>
+                <button type="button" onClick={() => setActivePage("Settings")} className="mt-4 min-h-11 rounded-xl bg-primary px-4 py-3 text-sm font-bold text-white">
+                  Open account settings
+                </button>
               </section>
             </section>
           )}
@@ -2902,6 +2956,16 @@ function App() {
                     } else if (!user.isVerifiedStudent) {
                       setMarketplaceError("Verify your student account before applying to sell.");
                     } else {
+                      setSellerApplicationForm({
+                        businessName: "",
+                        applicantName: user?.name || "",
+                        applicantPhone: user?.profile?.phone || "",
+                        contactEmail: user?.email || "",
+                        contactInfo: "",
+                        additionalInfo: "",
+                        categories: [],
+                        description: "",
+                      });
                       setSellerApplicationOpen(true);
                     }
                   }}
@@ -2926,15 +2990,9 @@ function App() {
                     >
                       Seller dashboard
                     </button>
-                    <button
-                      type="button"
-                      onClick={openPayoutSetup}
-                      className="ml-3 mt-5 inline-flex items-center gap-2 rounded-xl border border-white/40 px-4 py-3 text-sm font-bold text-white transition hover:bg-white/10"
-                    >
-                      Set payout account
-                    </button>
                   </>
                 )}
+                {sellerDashboardEligible && <p className="mt-3 text-sm text-blue-100">Seller payouts become eligible after delivery verification and are currently processed manually.</p>}
               </div>
 
               {sellerStatusError && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{sellerStatusError}</p>}
@@ -2946,6 +3004,19 @@ function App() {
                 }`}>
                   Seller application: <strong>{sellerStatus.application.status.toLowerCase()}</strong>
                   {sellerStatus.application.reviewNote && <p className="mt-1">{sellerStatus.application.reviewNote}</p>}
+                  {sellerStatus.application.history?.length > 1 && (
+                    <details className="mt-3 rounded-lg bg-white/70 p-3">
+                      <summary className="cursor-pointer font-semibold">Application history</summary>
+                      <ol className="mt-2 space-y-2">
+                        {sellerStatus.application.history.map((entry, index) => (
+                          <li key={`${entry._id || entry.changedAt}-${index}`} className="border-t border-slate-200 pt-2">
+                            <span className="font-semibold">{entry.status}</span> · {entry.changedAt ? new Date(entry.changedAt).toLocaleDateString() : "Date unavailable"}
+                            {entry.reviewNote && <p className="mt-1">{entry.reviewNote}</p>}
+                          </li>
+                        ))}
+                      </ol>
+                    </details>
+                  )}
                 </div>
               )}
 
@@ -3126,10 +3197,12 @@ function App() {
                             }${image}`
                         : "";
 
-                      const seller =
+                      const sellerProfileName =
                         typeof listing.seller === "object"
                           ? listing.seller?.name
                           : "Campus seller";
+                      const seller =
+                        listing.businessName || sellerProfileName || "Campus seller";
                       const sellerId =
                         typeof listing.seller === "object"
                           ? listing.seller?._id || listing.seller?.id
@@ -3219,8 +3292,9 @@ function App() {
                                   {seller || "Campus seller"}
                                 </button>
 
-                                <p className="text-xs text-slate-500">
-                                  Campus Connect seller
+                                <p className="truncate text-xs text-slate-500">
+                                  {sellerProfileName || "Campus Connect seller"}
+                                  {listing.seller?.username ? ` · @${listing.seller.username}` : ""}
                                 </p>
                               </div>
                             </div>
@@ -3309,8 +3383,26 @@ function App() {
                     </div>
                     <div className="mt-5 space-y-4">
                       <label className="block">
+                        <span className="mb-1.5 block text-sm font-semibold">Applicant full name</span>
+                        <input required minLength={2} maxLength={80} value={sellerApplicationForm.applicantName} onChange={(event) => setSellerApplicationForm((current) => ({ ...current, applicantName: event.target.value }))} className="w-full rounded-xl border border-slate-200 px-4 py-3" />
+                      </label>
+                      <div className="grid gap-4 sm:grid-cols-2">
+                        <label className="block">
+                          <span className="mb-1.5 block text-sm font-semibold">Phone number</span>
+                          <input required type="tel" minLength={7} maxLength={30} value={sellerApplicationForm.applicantPhone} onChange={(event) => setSellerApplicationForm((current) => ({ ...current, applicantPhone: event.target.value }))} className="w-full rounded-xl border border-slate-200 px-4 py-3" />
+                        </label>
+                        <label className="block">
+                          <span className="mb-1.5 block text-sm font-semibold">Contact email</span>
+                          <input required type="email" maxLength={254} value={sellerApplicationForm.contactEmail} onChange={(event) => setSellerApplicationForm((current) => ({ ...current, contactEmail: event.target.value }))} className="w-full rounded-xl border border-slate-200 px-4 py-3" />
+                        </label>
+                      </div>
+                      <label className="block">
                         <span className="mb-1.5 block text-sm font-semibold">Business or seller name</span>
                         <input required minLength={2} maxLength={100} value={sellerApplicationForm.businessName} onChange={(event) => setSellerApplicationForm((current) => ({ ...current, businessName: event.target.value }))} className="w-full rounded-xl border border-slate-200 px-4 py-3" />
+                      </label>
+                      <label className="block">
+                        <span className="mb-1.5 block text-sm font-semibold">Other contact information <span className="font-normal text-slate-500">(optional)</span></span>
+                        <input maxLength={120} value={sellerApplicationForm.contactInfo} onChange={(event) => setSellerApplicationForm((current) => ({ ...current, contactInfo: event.target.value }))} className="w-full rounded-xl border border-slate-200 px-4 py-3" placeholder="Store page, preferred contact method, etc." />
                       </label>
                       <fieldset>
                         <legend className="mb-2 text-sm font-semibold">What do you plan to sell?</legend>
@@ -3343,6 +3435,10 @@ function App() {
                       <label className="block">
                         <span className="mb-1.5 block text-sm font-semibold">Describe what you will offer and how you will fulfill orders</span>
                         <textarea required minLength={20} maxLength={1000} rows={4} value={sellerApplicationForm.description} onChange={(event) => setSellerApplicationForm((current) => ({ ...current, description: event.target.value }))} className="w-full resize-y rounded-xl border border-slate-200 px-4 py-3" />
+                      </label>
+                      <label className="block">
+                        <span className="mb-1.5 block text-sm font-semibold">Additional information <span className="font-normal text-slate-500">(optional)</span></span>
+                        <textarea maxLength={1000} rows={3} value={sellerApplicationForm.additionalInfo} onChange={(event) => setSellerApplicationForm((current) => ({ ...current, additionalInfo: event.target.value }))} className="w-full resize-y rounded-xl border border-slate-200 px-4 py-3" placeholder="Relevant experience, sourcing, or supporting details" />
                       </label>
                     </div>
                     {marketplaceError && <p role="alert" className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-800">{marketplaceError}</p>}
@@ -3451,7 +3547,12 @@ function App() {
                                   <span>Amount: ₦{Number(order.totalAmount || 0).toLocaleString()}</span><span>Qty: {order.quantity}</span><span>Payment: {order.paymentStatus}</span><span>Delivery: {order.deliveryStatus}</span>
                                 </div>
                                 <p className="mt-3 text-sm font-semibold text-slate-700">{order.deliveryMethod === "MIDDLEMAN" ? `Campus Connect middleman · ₦${Number(order.deliveryFee || 0).toLocaleString()} fee` : "Seller-to-buyer delivery"}</p>
-                                {isSeller && <p className="mt-1 text-xs text-slate-500">Payout: {order.sellerPayoutStatus} · ₦{Number(order.sellerPayoutAmount || 0).toLocaleString()} after ₦{Number(order.platformCommission || 0).toLocaleString()} commission</p>}
+                                {isSeller && <p className="mt-1 text-xs text-slate-500">Payout: {order.sellerPayoutStatus} · ₦{Number(order.sellerPayoutAmount || 0).toLocaleString()} after ₦{Number(order.platformCommission || 0).toLocaleString()} commission. Payout transfers are processed manually.</p>}
+                                {!isSeller && order.status === "PENDING_PAYMENT" && ["PENDING", "FAILED"].includes(order.paymentStatus) && (
+                                  <button type="button" disabled={Boolean(paymentRetryOrderId)} onClick={() => retryOrderPayment(order._id)} className="mt-4 rounded-xl bg-blue-700 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-60">
+                                    {paymentRetryOrderId === order._id ? "Opening Flutterwave..." : order.paymentStatus === "FAILED" ? "Retry payment" : "Continue payment"}
+                                  </button>
+                                )}
                                 {(isSeller || (order.deliveryMethod === "MIDDLEMAN" && user.role === "admin")) && order.status === "DELIVERED" && <div className="mt-4 flex gap-2"><input inputMode="numeric" maxLength={6} value={deliveryOtpInputs[order._id] || ""} onChange={(event) => setDeliveryOtpInputs((current) => ({ ...current, [order._id]: event.target.value }))} placeholder="Buyer’s 6-digit OTP" className="min-w-0 flex-1 rounded-xl border border-slate-200 px-3 py-2 text-sm" /><button type="button" onClick={() => verifyDeliveryOtp(order._id)} className="rounded-xl bg-blue-700 px-3 py-2 text-sm font-bold text-white">Verify</button></div>}
                                 <p className="mt-3 text-xs text-slate-500">Order date: {order.createdAt ? new Date(order.createdAt).toLocaleString() : "Not available"}</p>
                               </article>
@@ -3461,15 +3562,6 @@ function App() {
                       )}
                     </section>
                   </div>
-                </div>
-              )}
-
-              {payoutSetupOpen && (
-                <div className="fixed inset-0 z-[60] flex items-end bg-slate-950/50 sm:items-center sm:justify-center sm:p-4">
-                  <form onSubmit={savePayoutAccount} className="w-full rounded-t-3xl bg-white p-5 shadow-2xl sm:max-w-lg sm:rounded-3xl sm:p-7">
-                    <div className="flex items-start justify-between gap-4"><div><h3 className="text-xl font-extrabold">Seller payout account</h3><p className="mt-1 text-sm text-slate-500">Verified through Paystack test mode. Your account number is not stored.</p></div><button type="button" onClick={() => setPayoutSetupOpen(false)} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100">✕</button></div>
-                    <div className="mt-6 space-y-4"><label><span className="mb-1.5 block text-sm font-semibold">Bank</span><select required value={payoutForm.bankCode} onChange={(event) => setPayoutForm((current) => ({ ...current, bankCode: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3"><option value="">Choose your bank</option>{banks.map((bank) => <option key={bank.code} value={bank.code}>{bank.name}</option>)}</select></label><label><span className="mb-1.5 block text-sm font-semibold">10-digit account number</span><input required inputMode="numeric" pattern="[0-9]{10}" maxLength={10} value={payoutForm.accountNumber} onChange={(event) => setPayoutForm((current) => ({ ...current, accountNumber: event.target.value.replace(/\D/g, "") }))} className="w-full rounded-xl border border-slate-200 px-4 py-3" placeholder="0123456789" /></label></div><button type="submit" disabled={marketplaceSubmitting} className="mt-6 w-full rounded-xl bg-blue-700 px-5 py-3.5 text-sm font-bold text-white disabled:opacity-60">{marketplaceSubmitting ? "Verifying..." : "Verify and save account"}</button>
-                  </form>
                 </div>
               )}
 
@@ -3497,6 +3589,86 @@ function App() {
 
           {activePage === "Settings" && (
             <section className="space-y-5">
+              <header>
+                <h2 className="text-2xl font-extrabold">Account settings</h2>
+                <p className="mt-1 text-sm text-slate-500">Update your account details and security preferences.</p>
+              </header>
+              <section className="rounded-3xl border border-slate-200 bg-white p-5 sm:p-8">
+                <h3 className="text-lg font-extrabold">Personal information and username</h3>
+                <p className="mt-1 text-sm text-slate-500">Your username must be unique and can be changed at any time.</p>
+                {profileNotice && <p role="status" className="mt-4 rounded-xl bg-emerald-50 p-3 text-sm text-emerald-800">{profileNotice}</p>}
+                {profileError && <p role="alert" className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-800">{profileError}</p>}
+                <form onSubmit={saveProfileSettings} className="mt-5 grid gap-4 sm:grid-cols-2">
+                  <label>
+                    <span className="mb-1.5 block text-sm font-semibold">Username</span>
+                    <div className="flex items-center rounded-xl border border-slate-200 px-4 focus-within:border-blue-500">
+                      <span className="text-slate-400">@</span>
+                      <input name="username" required minLength={3} maxLength={24} pattern="^[A-Za-z0-9][A-Za-z0-9._]{1,22}[A-Za-z0-9]$" autoCapitalize="none" autoComplete="username" defaultValue={user.username || ""} aria-describedby="username-help" className="w-full min-w-0 px-2 py-3 outline-none" />
+                    </div>
+                    <span id="username-help" className="mt-1 block text-xs text-slate-500">3–24 letters, numbers, periods, or underscores.</span>
+                  </label>
+                  <label><span className="mb-1.5 block text-sm font-semibold">Full name</span><input name="name" required maxLength={80} defaultValue={user.name || ""} className="w-full rounded-xl border border-slate-200 px-4 py-3" /></label>
+                  <label><span className="mb-1.5 block text-sm font-semibold">Phone number</span><input name="phone" type="tel" maxLength={30} defaultValue={user.profile?.phone || ""} className="w-full rounded-xl border border-slate-200 px-4 py-3" /></label>
+                  <label><span className="mb-1.5 block text-sm font-semibold">Department</span><input name="department" maxLength={100} defaultValue={user.profile?.department || ""} className="w-full rounded-xl border border-slate-200 px-4 py-3" /></label>
+                  <label><span className="mb-1.5 block text-sm font-semibold">Level</span><input name="level" maxLength={50} defaultValue={user.profile?.level || ""} className="w-full rounded-xl border border-slate-200 px-4 py-3" /></label>
+                  <label className="sm:col-span-2"><span className="mb-1.5 block text-sm font-semibold">About you</span><textarea name="bio" maxLength={300} rows={3} defaultValue={user.profile?.bio || ""} className="w-full rounded-xl border border-slate-200 px-4 py-3" /></label>
+                  <label><span className="mb-1.5 block text-sm font-semibold">Profile visibility</span><select name="profileVisibility" defaultValue={user.privacy?.profileVisibility || "campus"} className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3"><option value="public">All students</option><option value="campus">My campus</option><option value="private">Only me</option></select></label>
+                  <label><span className="mb-1.5 block text-sm font-semibold">Default post visibility</span><select name="defaultPostVisibility" defaultValue={user.privacy?.defaultPostVisibility || "campus"} className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3"><option value="public">All students</option><option value="campus">My campus</option><option value="private">Only me</option></select></label>
+                  <label className="sm:col-span-2 flex items-center gap-3 text-sm"><input name="discoverable" type="checkbox" defaultChecked={user.privacy?.discoverable !== false} className="h-4 w-4" />Allow eligible students to find my profile in discovery.</label>
+                  <button type="submit" disabled={profileSaving} className="min-h-11 rounded-xl bg-primary px-5 py-3 text-sm font-bold text-white disabled:opacity-50 sm:col-span-2">{profileSaving ? "Saving..." : "Save personal information"}</button>
+                </form>
+              </section>
+
+              <section className="rounded-3xl border border-slate-200 bg-white p-5 sm:p-8">
+                <h3 className="text-lg font-extrabold">Email address</h3>
+                <p className="mt-1 text-sm text-slate-500">Your current email stays active until you verify the new address.</p>
+                <p className="mt-4 break-all text-sm"><span className="font-semibold">Current email:</span> {user.email}</p>
+                {user.pendingEmail && <p className="mt-2 break-all text-sm text-amber-800"><span className="font-semibold">Pending verification:</span> {user.pendingEmail}</p>}
+                {emailChangeNotice && <p role="status" className="mt-4 rounded-xl bg-emerald-50 p-3 text-sm text-emerald-800">{emailChangeNotice}</p>}
+                {emailChangeError && <p role="alert" className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-800">{emailChangeError}</p>}
+                <form onSubmit={requestEmailChange} className="mt-4 grid gap-4 sm:grid-cols-2">
+                  <label><span className="mb-1.5 block text-sm font-semibold">New email address</span><input required type="email" autoComplete="email" value={emailChangeForm.email} onChange={(event) => setEmailChangeForm((current) => ({ ...current, email: event.target.value }))} className="w-full rounded-xl border border-slate-200 px-4 py-3" /></label>
+                  <label><span className="mb-1.5 block text-sm font-semibold">Current password</span><input required type="password" autoComplete="current-password" value={emailChangeForm.currentPassword} onChange={(event) => setEmailChangeForm((current) => ({ ...current, currentPassword: event.target.value }))} className="w-full rounded-xl border border-slate-200 px-4 py-3" /></label>
+                  <button type="submit" disabled={emailChangeSaving} className="min-h-11 rounded-xl border border-slate-200 px-4 py-3 text-sm font-bold disabled:opacity-50 sm:col-span-2">{emailChangeSaving ? "Sending code..." : "Send verification code"}</button>
+                </form>
+                {user.pendingEmail && (
+                  <form onSubmit={verifyEmailChange} className="mt-5 flex flex-col gap-3 border-t border-slate-100 pt-5 sm:flex-row sm:items-end">
+                    <label className="flex-1"><span className="mb-1.5 block text-sm font-semibold">Six-digit code sent to {user.pendingEmail}</span><input required type="text" inputMode="numeric" autoComplete="one-time-code" maxLength={6} pattern="[0-9]{6}" value={emailChangeForm.otp} onChange={(event) => setEmailChangeForm((current) => ({ ...current, otp: event.target.value.replace(/\D/g, "").slice(0, 6) }))} className="w-full rounded-xl border border-slate-200 px-4 py-3 tracking-[0.3em]" /></label>
+                    <button type="submit" disabled={emailChangeVerifying || emailChangeForm.otp.length !== 6} className="min-h-11 rounded-xl bg-primary px-5 py-3 text-sm font-bold text-white disabled:opacity-50">{emailChangeVerifying ? "Verifying..." : "Verify email"}</button>
+                  </form>
+                )}
+              </section>
+
+              <section className="rounded-3xl border border-slate-200 bg-white p-5 sm:p-8">
+                <h3 className="text-lg font-extrabold">Profile picture</h3>
+                <div className="mt-4 flex flex-col gap-4 sm:flex-row sm:items-center">
+                  <div className="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-full bg-blue-100 text-xl font-bold text-blue-700">
+                    {(avatarPreview || user.profile?.avatar) ? <img src={avatarPreview || user.profile.avatar} alt="Profile preview" className="h-full w-full object-cover" /> : userInitials}
+                  </div>
+                  <div className="space-y-3">
+                    <input ref={avatarFileInput} type="file" accept="image/jpeg,image/png,image/webp" onChange={chooseProfileAvatar} className="block w-full text-sm file:mr-3 file:rounded-lg file:border-0 file:bg-blue-50 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-blue-700" />
+                    <p className="text-xs text-slate-500">JPG, PNG, or WebP up to 5 MB.</p>
+                    {avatarFile && <div className="flex gap-2">
+                      <button type="button" onClick={uploadProfileAvatar} disabled={avatarUploading} className="rounded-lg bg-primary px-3 py-2 text-sm font-bold text-white disabled:opacity-50">{avatarUploading ? "Uploading..." : "Save picture"}</button>
+                      <button type="button" onClick={() => { setAvatarFile(null); setAvatarPreview(""); if (avatarFileInput.current) avatarFileInput.current.value = ""; }} disabled={avatarUploading} className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold">Cancel</button>
+                    </div>}
+                  </div>
+                </div>
+              </section>
+
+              <section className="rounded-3xl border border-slate-200 bg-white p-5 sm:p-8">
+                <h3 className="text-lg font-extrabold">Password and security</h3>
+                <p className="mt-1 text-sm text-slate-500">Changing your password signs out your other active sessions.</p>
+                <form onSubmit={changeAccountPassword} className="mt-5">
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <label><span className="mb-1.5 block text-sm font-semibold">Current password</span><input required type="password" autoComplete="current-password" value={passwordForm.currentPassword} onChange={(event) => setPasswordForm((current) => ({ ...current, currentPassword: event.target.value }))} className="w-full rounded-xl border border-slate-200 px-4 py-3" /></label>
+                    <label><span className="mb-1.5 block text-sm font-semibold">New password</span><input required minLength={8} maxLength={128} pattern="(?=.*[A-Za-z])(?=.*[0-9]).{8,128}" title="Use 8 to 128 characters with at least one letter and one number." type="password" autoComplete="new-password" value={passwordForm.newPassword} onChange={(event) => setPasswordForm((current) => ({ ...current, newPassword: event.target.value }))} className="w-full rounded-xl border border-slate-200 px-4 py-3" /></label>
+                    <label className="sm:col-span-2"><span className="mb-1.5 block text-sm font-semibold">Confirm new password</span><input required minLength={8} maxLength={128} type="password" autoComplete="new-password" value={passwordForm.confirmPassword} onChange={(event) => setPasswordForm((current) => ({ ...current, confirmPassword: event.target.value }))} className="w-full rounded-xl border border-slate-200 px-4 py-3" /></label>
+                  </div>
+                  <button type="submit" disabled={passwordSaving} className="mt-4 min-h-11 rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold disabled:opacity-50">{passwordSaving ? "Updating..." : "Update password"}</button>
+                </form>
+              </section>
+
               <div className="rounded-3xl border border-slate-200 bg-white p-5 sm:p-8">
                 <h3 className="text-xl font-extrabold">Appearance</h3>
                 <p className="mt-2 text-sm text-slate-500">Choose how Campus Connect looks on this device. Your choice is saved and restored when you return.</p>
@@ -3517,14 +3689,6 @@ function App() {
                     </button>
                   ))}
                 </div>
-              </div>
-              <div className="rounded-3xl border border-slate-200 bg-white p-5 sm:p-8">
-                <Settings size={30} className="text-primary" />
-                <h3 className="mt-3 text-xl font-extrabold">Account settings</h3>
-                <p className="mt-2 text-sm text-slate-500">Profile, privacy, and password settings are available from your Profile page.</p>
-                <button type="button" onClick={() => setActivePage("Profile")} className="mt-5 min-h-11 rounded-xl bg-primary px-4 py-3 text-sm font-bold text-white">
-                  Open profile settings
-                </button>
               </div>
             </section>
           )}
@@ -3607,6 +3771,7 @@ function App() {
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-1.5">
                           <button type="button" onClick={() => openUserProfile(post.authorId)} className="text-left text-sm font-bold hover:text-blue-700 hover:underline">{post.name}</button>
+                          {post.username && <span className="text-xs text-slate-500">@{post.username}</span>}
 
                           {post.verified && (
                             <ShieldCheck
@@ -4043,6 +4208,7 @@ function App() {
                     ? <img src={selectedStudentProfile.avatar} alt={`${selectedStudentProfile.name}'s profile`} className="h-20 w-20 shrink-0 rounded-2xl object-cover" />
                     : <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-2xl bg-blue-100 text-xl font-extrabold text-blue-700">{selectedStudentProfile.name?.[0] || "S"}</div>}
                   <div className="min-w-0">
+                    {selectedStudentProfile.username && <p className="mb-1 text-sm font-semibold text-slate-700">@{selectedStudentProfile.username}</p>}
                     <p className="text-sm text-slate-600">{[selectedStudentProfile.institution, selectedStudentProfile.campus].filter(Boolean).join(" · ") || "Campus Connect student"}</p>
                     <p className="mt-1 text-sm text-slate-500">{[selectedStudentProfile.department, selectedStudentProfile.level].filter(Boolean).join(" · ")}</p>
                     {selectedStudentProfile.isVerifiedStudent && <p className="mt-2 text-sm font-semibold text-blue-700">Verified student</p>}
@@ -4158,7 +4324,7 @@ function App() {
                     {person.avatar
                       ? <img src={person.avatar} alt="" className="h-10 w-10 rounded-full object-cover" />
                       : <span className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-100 font-bold text-blue-700">{person.name?.[0] || "S"}</span>}
-                    <span className="truncate text-sm font-semibold">{person.name}</span>
+                    <span className="min-w-0 truncate text-sm font-semibold">{person.name}{person.username ? <span className="ml-2 text-xs font-normal text-slate-500">@{person.username}</span> : null}</span>
                   </button>
                 ))}
               </div>

@@ -8,7 +8,7 @@ export const createSellerEligibilityLookup = ({
   orders,
 }) => async (userId) => {
   const application = await sellerApplications.findOne({ seller: userId })
-    .select("status businessName categories description reviewNote createdAt reviewedAt")
+    .select("status businessName applicantName applicantPhone contactEmail contactInfo additionalInfo categories description reviewNote history createdAt updatedAt lastSubmittedAt reviewedAt")
     .lean();
 
   if (application) {

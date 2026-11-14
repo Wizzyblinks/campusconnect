@@ -175,7 +175,7 @@ export const getHiddenPosts = async (req, res) => {
     filter._id = { $in: hiddenIds };
     const posts = await Post.find(filter)
       .select("text author createdAt")
-      .populate("author", "name profile.avatar")
+      .populate("author", "name username profile.avatar")
       .sort({ updatedAt: -1 })
       .limit(200)
       .lean();
@@ -478,7 +478,7 @@ export const getPostComments = async (req, res) => {
       delete filter.isDeleted;
     }
     const comments = await PostComment.find(filter)
-      .populate("author", "name profile.avatar")
+      .populate("author", "name username profile.avatar")
       .sort({ createdAt: 1 }).skip((page - 1) * 20).limit(20).lean();
     const normalizedComments = comments.map((comment) =>
       comment.isDeleted ? { ...comment, text: "Comment deleted" } : comment,
@@ -504,7 +504,7 @@ export const createPostComment = async (req, res) => {
       if (!parent) return res.status(404).json({ message: "That comment is no longer available." });
     }
     const comment = await PostComment.create({ post: post._id, author: req.user._id, parent: parent?._id || null, text });
-    const populated = await PostComment.findById(comment._id).populate("author", "name profile.avatar").lean();
+    const populated = await PostComment.findById(comment._id).populate("author", "name username profile.avatar").lean();
     const commentsCount = await PostComment.countDocuments({ post: post._id, isDeleted: false });
     const recipient = parent?.author || post.author;
     if (recipient.toString() !== req.user._id.toString()) {
@@ -545,7 +545,7 @@ export const updatePostComment = async (req, res) => {
       { _id: existing._id, author: req.user._id, isDeleted: false },
       { $set: { text } },
       { returnDocument: "after", runValidators: true },
-    ).populate("author", "name profile.avatar");
+    ).populate("author", "name username profile.avatar");
     if (!comment) return res.status(404).json({ message: "Comment not found or you don't have permission to edit it." });
     return res.json({ comment });
   } catch (error) {

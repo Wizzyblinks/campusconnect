@@ -18,7 +18,7 @@ const findEligibleTarget = async (targetId) => {
     isRestricted: { $ne: true },
     emailVerified: { $ne: false },
     "privacy.discoverable": { $ne: false },
-  }).select("name institution campus privacy isRestricted emailVerified profile.avatar");
+  }).select("name username institution campus privacy isRestricted emailVerified profile.avatar");
 };
 
 const isBlocked = (firstUserId, secondUserId) =>
@@ -199,12 +199,12 @@ export const getFollowRequests = async (req, res) => {
   try {
     const [incoming, outgoing] = await Promise.all([
       FollowRequest.find({ following: req.user._id, status: "PENDING" })
-        .populate("follower", "name profile.avatar")
+        .populate("follower", "name username profile.avatar")
         .sort({ createdAt: -1 })
         .limit(100)
         .lean(),
       FollowRequest.find({ follower: req.user._id, status: "PENDING" })
-        .populate("following", "name profile.avatar")
+        .populate("following", "name username profile.avatar")
         .sort({ createdAt: -1 })
         .limit(100)
         .lean(),
@@ -242,7 +242,7 @@ export const getFollowList = async (req, res) => {
     const relationshipFilter = { [field]: target._id, status: "ACCEPTED" };
     const relationships = await FollowRequest.find(relationshipFilter)
       .select(inverse)
-      .populate(inverse, "name institution campus privacy isRestricted emailVerified profile.avatar")
+      .populate(inverse, "name username institution campus privacy isRestricted emailVerified profile.avatar")
       .sort({ createdAt: -1 })
       .lean();
     const userIds = relationships

@@ -36,7 +36,7 @@ export const getTrending = async (req, res) => {
     };
     const posts = await Post.find(postFilter)
       .select("text author visibility institution campus hashtags createdAt")
-      .populate("author", "name profile.avatar")
+      .populate("author", "name username profile.avatar")
       .sort({ createdAt: -1 })
       .limit(250)
       .lean();

@@ -49,11 +49,14 @@ export const getStudentSuggestions = async (req, res) => {
         filter.campus = campusId;
       }
     }
-    if (name) filter.name = { $regex: escapeRegex(name), $options: "i" };
+    if (name) {
+      const namePattern = { $regex: escapeRegex(name), $options: "i" };
+      filter.$and = [{ $or: [{ name: namePattern }, { username: namePattern }] }];
+    }
 
     const [users, total, institutions] = await Promise.all([
       User.find(filter)
-        .select("name institution campus profile.avatar profile.bio profile.department profile.level isVerifiedStudent")
+        .select("name username institution campus profile.avatar profile.bio profile.department profile.level isVerifiedStudent")
         .populate("institution", "name shortName campuses")
         .sort({ isVerifiedStudent: -1, name: 1 })
         .skip((page - 1) * limit)
@@ -68,6 +71,7 @@ export const getStudentSuggestions = async (req, res) => {
     const results = users.map((person) => ({
       id: person._id,
       name: person.name,
+      username: person.username || "",
       avatar: person.profile?.avatar || "",
       bio: person.profile?.bio || "",
       department: person.profile?.department || "",
@@ -106,7 +110,7 @@ export const getPublicProfile = async (req, res) => {
       role: "student",
       isRestricted: { $ne: true },
       emailVerified: { $ne: false },
-    }).select("name institution campus privacy profile.avatar profile.bio profile.department profile.level isVerifiedStudent");
+    }).select("name username institution campus privacy profile.avatar profile.bio profile.department profile.level isVerifiedStudent");
     if (!user) return res.status(404).json({ message: "This profile isn't available." });
     const blocked = await VibeCheckInteraction.exists({
       action: "BLOCK",
@@ -155,6 +159,7 @@ export const getPublicProfile = async (req, res) => {
       profile: {
         id: user._id,
         name: user.name,
+        username: user.username || "",
         avatar: user.profile?.avatar || "",
         bio: canViewFullProfile ? user.profile?.bio || "" : "",
         department: canViewFullProfile ? user.profile?.department || "" : "",

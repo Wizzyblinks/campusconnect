@@ -38,6 +38,13 @@ const orderSchema = new mongoose.Schema(
       min: 0,
     },
 
+    currency: {
+      type: String,
+      uppercase: true,
+      trim: true,
+      default: "NGN",
+    },
+
     deliveryMethod: {
       type: String,
       enum: ["MIDDLEMAN", "SELLER_TO_BUYER"],

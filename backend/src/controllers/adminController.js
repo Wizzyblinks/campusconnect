@@ -5,6 +5,8 @@ import CampusServiceActivity from "../models/CampusServiceActivity.js";
 import Dispute from "../models/Dispute.js";
 import MarketplaceListing from "../models/MarketplaceListing.js";
 import Order from "../models/Order.js";
+import Payment from "../models/Payment.js";
+import Payout from "../models/Payout.js";
 import Post from "../models/Post.js";
 import PostReport from "../models/PostReport.js";
 import ServiceRequest from "../models/ServiceRequest.js";
@@ -122,12 +124,13 @@ export const getAdminUsers = async (req, res) => {
       const escaped = escapeRegex(search.trim());
       filter.$or = [
         { name: { $regex: escaped, $options: "i" } },
+        { username: { $regex: escaped, $options: "i" } },
         { email: { $regex: escaped, $options: "i" } },
       ];
     }
     const [users, total] = await Promise.all([
       User.find(filter)
-        .select("name email role profile.avatar isVerifiedStudent isRestricted isOnline createdAt +restrictionReason +restrictedAt")
+        .select("name username email role profile.avatar isVerifiedStudent isRestricted isOnline createdAt +restrictionReason +restrictedAt")
         .sort({ createdAt: -1 })
         .skip((page - 1) * limit)
         .limit(limit)
@@ -231,8 +234,8 @@ export const getAdminListings = async (req, res) => {
     const filter = adminScope(req.user);
     const [listings, total] = await Promise.all([
       MarketplaceListing.find(filter)
-        .select("title description price category images condition stock status seller createdAt moderatedBy moderatedAt moderationReason")
-        .populate("seller", "name profile.avatar")
+        .select("title description price category images condition stock status seller businessName createdAt moderatedBy moderatedAt moderationReason")
+        .populate("seller", "name username profile.avatar")
         .populate("moderatedBy", "name")
         .sort({ createdAt: -1 })
         .skip((page - 1) * limit)
@@ -505,5 +508,40 @@ export const getAdminDisputes = async (req, res) => {
   } catch (error) {
     console.error("Admin dispute list error:", error.message);
     return res.status(500).json({ message: "We couldn't load marketplace disputes." });
+  }
+};
+
+export const getAdminPayments = async (req, res) => {
+  try {
+    const campusUserIds = await User.distinct("_id", adminScope(req.user));
+    const [payments, total] = await Promise.all([
+      Payment.find({ buyer: { $in: campusUserIds } })
+        .populate("order", "status paymentStatus totalAmount currency createdAt")
+        .populate("buyer", "name username email")
+        .sort({ createdAt: -1 })
+        .limit(200)
+        .lean(),
+      Payment.countDocuments({ buyer: { $in: campusUserIds } }),
+    ]);
+    return res.json({ payments, total });
+  } catch (error) {
+    console.error("Admin payment list failed:", error.message);
+    return res.status(500).json({ message: "We couldn't load payment records." });
+  }
+};
+
+export const getAdminPayouts = async (req, res) => {
+  try {
+    const campusUserIds = await User.distinct("_id", adminScope(req.user));
+    const payouts = await Payout.find({ seller: { $in: campusUserIds } })
+      .populate("seller", "name username")
+      .populate("order", "status paymentStatus sellerPayoutStatus createdAt")
+      .sort({ createdAt: -1 })
+      .limit(200)
+      .lean();
+    return res.json({ payouts });
+  } catch (error) {
+    console.error("Admin payout queue failed:", error.message);
+    return res.status(500).json({ message: "We couldn't load the payout queue." });
   }
 };

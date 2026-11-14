@@ -41,17 +41,21 @@ export const searchCampusConnect = async (req, res) => {
         emailVerified: { $ne: false },
         "privacy.discoverable": { $ne: false },
         "privacy.profileVisibility": { $ne: "private" },
-        $or: [
-          { "privacy.profileVisibility": "public" },
+        $and: [
           {
-            institution: req.user.institution,
-            campus: req.user.campus,
-            "privacy.profileVisibility": { $ne: "private" },
+            $or: [
+              { "privacy.profileVisibility": "public" },
+              {
+                institution: req.user.institution,
+                campus: req.user.campus,
+                "privacy.profileVisibility": { $ne: "private" },
+              },
+            ],
           },
+          { $or: [{ name: pattern }, { username: pattern }] },
         ],
-        name: pattern,
       })
-        .select("name institution campus profile.avatar profile.bio profile.department privacy.profileVisibility")
+        .select("name username institution campus profile.avatar profile.bio profile.department privacy.profileVisibility")
         .populate("institution", "name shortName campuses")
         .sort({ name: 1 })
         .skip(skip)
@@ -59,7 +63,7 @@ export const searchCampusConnect = async (req, res) => {
         .lean(),
       Post.find(searchPostFilter)
         .select("text media author institution campus visibility createdAt")
-        .populate("author", "name profile.avatar")
+        .populate("author", "name username profile.avatar")
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(10)
@@ -103,8 +107,8 @@ export const searchCampusConnect = async (req, res) => {
         campus: req.user.campus,
         $or: [{ title: pattern }, { description: pattern }, { category: pattern }],
       })
-        .select("title description price images category seller")
-        .populate("seller", "name profile.avatar")
+        .select("title description price images category seller businessName")
+        .populate("seller", "name username profile.avatar")
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(10)
@@ -119,6 +123,7 @@ export const searchCampusConnect = async (req, res) => {
         students: users.map((person) => ({
           id: person._id,
           name: person.name,
+          username: person.username || "",
           avatar: person.profile?.avatar || "",
           bio: person.profile?.bio || "",
           department: person.profile?.department || "",

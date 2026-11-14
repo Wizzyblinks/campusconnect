@@ -23,6 +23,37 @@ const sellerApplicationSchema = new mongoose.Schema(
       trim: true,
       maxlength: 100,
     },
+    applicantName: {
+      type: String,
+      trim: true,
+      maxlength: 80,
+      default: "",
+    },
+    applicantPhone: {
+      type: String,
+      trim: true,
+      maxlength: 30,
+      default: "",
+    },
+    contactEmail: {
+      type: String,
+      lowercase: true,
+      trim: true,
+      maxlength: 254,
+      default: "",
+    },
+    contactInfo: {
+      type: String,
+      trim: true,
+      maxlength: 120,
+      default: "",
+    },
+    additionalInfo: {
+      type: String,
+      trim: true,
+      maxlength: 1000,
+      default: "",
+    },
     categories: {
       type: [{ type: String, enum: ["electronics", "fashion", "books", "food", "services", "school_items", "others"] }],
       required: true,
@@ -56,6 +87,30 @@ const sellerApplicationSchema = new mongoose.Schema(
     reviewedAt: {
       type: Date,
       default: null,
+    },
+    history: [
+      {
+        status: {
+          type: String,
+          enum: ["PENDING", "APPROVED", "REJECTED", "SUSPENDED"],
+          required: true,
+        },
+        businessName: { type: String, trim: true, maxlength: 100, default: "" },
+        applicantName: { type: String, trim: true, maxlength: 80, default: "" },
+        applicantPhone: { type: String, trim: true, maxlength: 30, default: "" },
+        contactEmail: { type: String, lowercase: true, trim: true, maxlength: 254, default: "" },
+        contactInfo: { type: String, trim: true, maxlength: 120, default: "" },
+        additionalInfo: { type: String, trim: true, maxlength: 1000, default: "" },
+        categories: [{ type: String }],
+        description: { type: String, trim: true, maxlength: 1000, default: "" },
+        reviewNote: { type: String, trim: true, maxlength: 500, default: "" },
+        changedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+        changedAt: { type: Date, default: Date.now },
+      },
+    ],
+    lastSubmittedAt: {
+      type: Date,
+      default: Date.now,
     },
   },
   { timestamps: true },

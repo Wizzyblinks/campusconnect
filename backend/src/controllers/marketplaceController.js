@@ -216,6 +216,8 @@ export const createListing = async (req, res) => {
 
     const listing = await MarketplaceListing.create({
       seller: req.user._id,
+      businessName:
+        req.sellerEligibility?.application?.businessName || req.user.name,
       title: normalizedTitle,
       description: normalizedDescription,
       price: parsedPrice,
@@ -267,7 +269,7 @@ export const getMarketplaceListings = async (req, res) => {
     }
 
     const listings = await MarketplaceListing.find(filter)
-      .select("title description price category images condition stock seller createdAt")
+      .select("title description price category images condition stock seller businessName createdAt")
       .populate("seller", PUBLIC_PROFILE_FIELDS)
       .sort({ createdAt: -1 });
 
@@ -298,7 +300,7 @@ export const getMyListings = async (req, res) => {
 export const getListingById = async (req, res) => {
   try {
     const listing = await MarketplaceListing.findById(req.params.id)
-      .select("title description price category images condition stock seller status views moderatedAt createdAt updatedAt")
+      .select("title description price category images condition stock seller businessName status views moderatedAt createdAt updatedAt")
       .populate(
       "seller",
       PUBLIC_PROFILE_FIELDS,

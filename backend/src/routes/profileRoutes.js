@@ -3,8 +3,10 @@ import multer from "multer";
 import {
   changePassword,
   getProfile,
+  requestEmailChange,
   updateProfile,
   uploadProfileAvatar,
+  verifyEmailChange,
 } from "../controllers/profileController.js";
 import protect from "../middleware/authMiddleware.js";
 import uploadAvatarImage from "../middleware/profileAvatarUploadMiddleware.js";
@@ -15,6 +17,8 @@ router.get("/", protect, getProfile);
 router.post("/avatar", protect, uploadAvatarImage.single("avatar"), uploadProfileAvatar);
 router.patch("/", protect, updateProfile);
 router.patch("/password", protect, changePassword);
+router.post("/email-change", protect, requestEmailChange);
+router.post("/email-change/verify", protect, verifyEmailChange);
 
 router.use((error, req, res, next) => {
   if (error instanceof multer.MulterError) {

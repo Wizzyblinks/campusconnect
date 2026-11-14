@@ -6,7 +6,6 @@ const paymentSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "Order",
       required: true,
-      unique: true,
     },
 
     buyer: {
@@ -28,7 +27,7 @@ const paymentSchema = new mongoose.Schema(
 
     status: {
       type: String,
-      enum: ["PENDING", "SUCCESS", "REFUND_PENDING", "REFUNDED", "FAILED"],
+      enum: ["PENDING", "PROCESSING", "SUCCESS", "REFUND_PENDING", "REFUNDED", "FAILED"],
       default: "PENDING",
     },
 
@@ -42,6 +41,16 @@ const paymentSchema = new mongoose.Schema(
       type: String,
       enum: ["TEST", "PAYSTACK", "FLUTTERWAVE"],
       default: "PAYSTACK",
+    },
+
+    providerTransactionId: {
+      type: String,
+      default: null,
+    },
+
+    providerReference: {
+      type: String,
+      default: null,
     },
 
     authorizationUrl: {
@@ -64,6 +73,11 @@ const paymentSchema = new mongoose.Schema(
       default: null,
     },
 
+    refundProviderId: {
+      type: String,
+      default: "",
+    },
+
     refundAmount: {
       type: Number,
       default: 0,
@@ -75,10 +89,27 @@ const paymentSchema = new mongoose.Schema(
       enum: ["PENDING", "PROCESSED", "FAILED"],
       default: null,
     },
+
+    verificationDetails: {
+      type: mongoose.Schema.Types.Mixed,
+      default: null,
+      select: false,
+    },
+
+    failedAt: {
+      type: Date,
+      default: null,
+    },
   },
   {
     timestamps: true,
   },
+);
+
+paymentSchema.index({ order: 1, createdAt: -1 });
+paymentSchema.index(
+  { provider: 1, providerReference: 1 },
+  { unique: true, partialFilterExpression: { providerReference: { $type: "string" } } },
 );
 
 const Payment = mongoose.model("Payment", paymentSchema);

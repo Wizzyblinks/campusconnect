@@ -19,6 +19,7 @@ import {
   RESEND_COOLDOWN_SECONDS,
   enforceOtpRateLimit,
 } from "../services/otpService.js";
+import { createUniqueUsername } from "../services/usernames.js";
 
 const buildOtpFailurePayload = (otpToken) => {
   if (!otpToken) {
@@ -98,9 +99,11 @@ export const register = async (req, res) => {
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
+    const username = await createUniqueUsername(User, name);
 
     const user = await User.create({
       name: String(name).trim(),
+      username,
       email: normalizedEmail,
       password: hashedPassword,
       institution,
@@ -126,6 +129,7 @@ export const register = async (req, res) => {
       user: {
         id: user._id,
         name: user.name,
+        username: user.username,
         email: user.email,
         institution: user.institution,
         campus: user.campus,
@@ -665,6 +669,11 @@ export const login = async (req, res) => {
       });
     }
 
+    if (!user.username) {
+      user.username = await createUniqueUsername(User, user.name);
+      await user.save();
+    }
+
     const token = jwt.sign(
       {
         id: user._id,
@@ -686,6 +695,7 @@ export const login = async (req, res) => {
       user: {
         id: user._id,
         name: user.name,
+        username: user.username,
         email: user.email,
         institution: institutionData
           ? {

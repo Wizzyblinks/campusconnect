@@ -321,12 +321,17 @@ export const verifyDelivery = async (req, res) => {
     const payout = await releaseSellerPayout(order);
 
     return res.json({
-      message:
-        payout.status === "INITIATED"
+      message: payout.status === "PENDING_MANUAL"
+        ? "Delivery verified. Seller funds are eligible and queued for manual payout; no transfer has been initiated."
+        : payout.status === "INITIATED"
           ? "Delivery verified and seller payout has been initiated."
-          : "Delivery verified. The seller must add a verified payout account before funds can be transferred.",
+          : "Delivery verified. Seller payout is pending.",
       order: safeOrderResponse(order),
-      payout: { status: payout.status, reference: payout.reference },
+      payout: {
+        status: payout.status,
+        provider: payout.provider || "PAYSTACK",
+        reference: payout.reference,
+      },
     });
   } catch (error) {
     console.error("Verify delivery error:", error.message);

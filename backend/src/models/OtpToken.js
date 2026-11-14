@@ -10,9 +10,15 @@ const otpTokenSchema = new mongoose.Schema(
     },
     purpose: {
       type: String,
-      enum: ["signup", "reset"],
+      enum: ["signup", "reset", "email_change"],
       required: true,
       index: true,
+    },
+    recipientEmail: {
+      type: String,
+      lowercase: true,
+      trim: true,
+      default: null,
     },
     otpHash: {
       type: String,

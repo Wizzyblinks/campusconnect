@@ -60,6 +60,11 @@ test("seller application requires student verification before writing an applica
       user: { _id: "unverified-student", isVerifiedStudent: false },
       body: {
         businessName: "Campus Books",
+        applicantName: "Student Applicant",
+        applicantPhone: "08012345678",
+        contactEmail: "student@example.com",
+        contactInfo: "",
+        additionalInfo: "",
         categories: ["books"],
         description: "Selling course books and supplies to students.",
       },
@@ -68,4 +73,41 @@ test("seller application requires student verification before writing an applica
   );
   assert.equal(res.statusCode, 403);
   assert.match(res.body.message, /verification/i);
+});
+
+test("seller applications reject protected fields and incomplete contact details", async () => {
+  const protectedFieldResponse = responseStub();
+  await submitSellerApplication(
+    {
+      user: { _id: "verified-student", isVerifiedStudent: true },
+      body: {
+        businessName: "Campus Books",
+        applicantName: "Student Applicant",
+        applicantPhone: "08012345678",
+        contactEmail: "student@example.com",
+        categories: ["books"],
+        description: "Selling course books and supplies to students.",
+        status: "APPROVED",
+      },
+    },
+    protectedFieldResponse,
+  );
+  assert.equal(protectedFieldResponse.statusCode, 400);
+
+  const invalidContactResponse = responseStub();
+  await submitSellerApplication(
+    {
+      user: { _id: "verified-student", isVerifiedStudent: true },
+      body: {
+        businessName: "Campus Books",
+        applicantName: "Student Applicant",
+        applicantPhone: "abc",
+        contactEmail: "student@example.com",
+        categories: ["books"],
+        description: "Selling course books and supplies to students.",
+      },
+    },
+    invalidContactResponse,
+  );
+  assert.equal(invalidContactResponse.statusCode, 400);
 });
