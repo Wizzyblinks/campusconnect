@@ -2,8 +2,12 @@ import Group from "../models/Group.js";
 import MarketplaceListing from "../models/MarketplaceListing.js";
 import News from "../models/News.js";
 import Post from "../models/Post.js";
+import HiddenPost from "../models/HiddenPost.js";
 import User from "../models/User.js";
-import { accessiblePostFilter } from "../services/postAccess.js";
+import {
+  accessiblePostFilter,
+  hiddenPrivateProfileAuthors,
+} from "../services/postAccess.js";
 
 const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -20,7 +24,13 @@ export const searchCampusConnect = async (req, res) => {
     const pattern = new RegExp(escapeRegex(query), "i");
     const skip = (page - 1) * 10;
     const searchPostFilter = accessiblePostFilter(req.user);
-    searchPostFilter.author = { $nin: await User.find({ isRestricted: true }).distinct("_id") };
+    const [restrictedAuthors, hiddenAuthors, hiddenPostIds] = await Promise.all([
+      User.find({ isRestricted: true }).distinct("_id"),
+      hiddenPrivateProfileAuthors(req.user),
+      HiddenPost.distinct("post", { user: req.user._id }),
+    ]);
+    searchPostFilter.author = { $nin: [...restrictedAuthors, ...hiddenAuthors] };
+    if (hiddenPostIds.length) searchPostFilter._id = { $nin: hiddenPostIds };
     searchPostFilter.$and = [{ $or: [{ text: pattern }, { hashtags: pattern }] }];
 
     const [users, posts, news, groups, listings] = await Promise.all([

@@ -5,6 +5,7 @@ import DirectMessage from "../models/DirectMessage.js";
 import VibeCheckInteraction from "../models/VibeCheckInteraction.js";
 import {
   loadAuthorizedConversation,
+  canSendInConversation,
   MessagingError,
   persistDirectMessage,
 } from "../services/directMessageService.js";
@@ -28,9 +29,7 @@ export const searchMessageRecipients = async (req, res) => {
       });
     }
 
-    const currentUser = await User.findById(req.user._id).select(
-      "isVerifiedStudent institution",
-    );
+    const currentUser = await User.findById(req.user._id).select("_id");
     if (!currentUser) {
       return res.status(404).json({ message: "User not found" });
     }
@@ -39,12 +38,8 @@ export const searchMessageRecipients = async (req, res) => {
       _id: { $ne: req.user._id },
       isRestricted: { $ne: true },
       role: "student",
-      institution: currentUser.institution,
       name: { $regex: escaped, $options: "i" },
     };
-    if (!currentUser.isVerifiedStudent) {
-      filters.isVerifiedStudent = { $ne: true };
-    }
     const candidates = await User.find(filters)
       .select("name profile.avatar isVerifiedStudent isOnline")
       .sort({ name: 1 })
@@ -112,13 +107,7 @@ export const startConversation = async (req, res) => {
       });
     }
 
-    if (
-      sender.role !== "student" ||
-      receiver.role !== "student" ||
-      !sender.institution ||
-      !receiver.institution ||
-      sender.institution.toString() !== receiver.institution.toString()
-    ) {
+    if (sender.role !== "student" || receiver.role !== "student") {
       return res.status(404).json({
         message: "Student not found",
       });
@@ -127,17 +116,6 @@ export const startConversation = async (req, res) => {
     if (sender.isRestricted || receiver.isRestricted) {
       return res.status(403).json({
         message: "Messaging is unavailable for this account",
-      });
-    }
-
-    const senderVerified = sender.isVerifiedStudent === true;
-    const receiverVerified = receiver.isVerifiedStudent === true;
-
-    // Unverified users cannot initiate conversations with verified users
-    if (!senderVerified && receiverVerified) {
-      return res.status(403).json({
-        message:
-          "You must be a paid verified user to start a conversation with a verified user",
       });
     }
 
@@ -172,10 +150,21 @@ export const startConversation = async (req, res) => {
       status: "PENDING",
     });
 
-    req.app
-      .get("io")
-      ?.to(`user:${receiverId}`)
-      .emit("dm:request", { conversationId: conversation._id });
+    const io = req.app.get("io");
+    io?.to(`user:${receiverId}`).emit("dm:request", {
+      conversationId: conversation._id,
+    });
+    await safelyCreateNotification({
+      io,
+      recipient: receiverId,
+      actor: senderId,
+      type: "direct_message",
+      title: `${sender.name} sent you a message request`,
+      message: "Open Messages to accept or decline the request.",
+      targetType: "conversation",
+      targetId: conversation._id,
+      sourceId: conversation._id,
+    });
 
     return res.status(201).json({
       message: "Conversation request sent",
@@ -386,14 +375,37 @@ export const sendDirectMessage = async (req, res) => {
     const { conversation, receiverId } = await loadAuthorizedConversation(
       conversationId,
       req.user._id,
-      { requireAccepted: true },
     );
+    const hasRequestMessage = conversation.status === "PENDING"
+      ? Boolean(await DirectMessage.exists({
+          conversation: conversation._id,
+          isRequestMessage: true,
+        }))
+      : false;
+    const isRequestMessageRetry = conversation.status === "PENDING"
+      ? Boolean(await DirectMessage.exists({
+          conversation: conversation._id,
+          sender: req.user._id,
+          clientMessageId: req.body?.clientMessageId,
+          isRequestMessage: true,
+        }))
+      : false;
+    if (
+      !canSendInConversation(conversation, req.user._id, hasRequestMessage) &&
+      !isRequestMessageRetry
+    ) {
+      throw new MessagingError(
+        403,
+        "You can send one introductory message with a request; further messages require acceptance.",
+      );
+    }
     const populatedMessage = await persistDirectMessage({
       conversation,
       senderId: req.user._id,
       receiverId,
       content: req.body?.message,
       clientMessageId: req.body?.clientMessageId,
+      isRequestMessage: conversation.status === "PENDING",
     });
 
     const io = req.app.get("io");
@@ -406,7 +418,9 @@ export const sendDirectMessage = async (req, res) => {
       message: "Open the conversation to read it.",
       targetType: "conversation",
       targetId: conversation._id,
-      sourceId: populatedMessage._id,
+      sourceId: conversation.status === "PENDING"
+        ? conversation._id
+        : populatedMessage._id,
     });
     if (io) {
       const payload = { conversationId, message: populatedMessage };

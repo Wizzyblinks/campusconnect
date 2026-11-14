@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { LogIn, UserPlus, School, ArrowLeft, Eye, EyeOff } from "lucide-react";
 import { apiRequest } from "./services/api.js";
 import campusConnectLogo from "./assets/cclogo.jpeg";
@@ -18,8 +18,11 @@ function Auth({ onLogin }) {
   const [institutions, setInstitutions] = useState([]);
   const [loadingInstitutions, setLoadingInstitutions] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [resendingType, setResendingType] = useState("");
   const [showLoginPassword, setShowLoginPassword] = useState(false);
   const [error, setError] = useState("");
+  const [successMessage, setSuccessMessage] = useState("");
+  const resendInFlight = useRef(false);
   const [verificationEmail, setVerificationEmail] = useState("");
   const [resetEmail, setResetEmail] = useState("");
   const [otpCode, setOtpCode] = useState("");
@@ -81,6 +84,7 @@ function Auth({ onLogin }) {
     setMode("login");
     setView("login");
     setError("");
+    setSuccessMessage("");
     setOtpCode("");
     setVerifiedResetOtp("");
     setNewPassword("");
@@ -172,6 +176,7 @@ function Auth({ onLogin }) {
 
   async function handleVerifyOtp(type = "signup") {
     setError("");
+    setSuccessMessage("");
     setLoading(true);
 
     try {
@@ -211,7 +216,11 @@ function Auth({ onLogin }) {
   }
 
   async function handleResendOtp(type = "signup") {
+    if (resendInFlight.current || loading) return;
+    resendInFlight.current = true;
     setError("");
+    setSuccessMessage("");
+    setResendingType(type);
     setLoading(true);
 
     try {
@@ -228,10 +237,16 @@ function Auth({ onLogin }) {
       });
 
       setResendSeconds(60);
-      setError("");
+      setSuccessMessage(
+        type === "reset"
+          ? "A new password reset code has been sent to your email."
+          : "A new verification code has been sent to your email.",
+      );
     } catch (err) {
       setError(err.message || "Unable to resend the code.");
     } finally {
+      resendInFlight.current = false;
+      setResendingType("");
       setLoading(false);
     }
   }
@@ -239,6 +254,7 @@ function Auth({ onLogin }) {
   async function handleForgotPasswordSubmit(event) {
     event.preventDefault();
     setError("");
+    setSuccessMessage("");
     setLoading(true);
 
     try {
@@ -407,6 +423,11 @@ function Auth({ onLogin }) {
                 {error}
               </div>
             )}
+            {successMessage && (
+              <div role="status" className="rounded-xl border border-green-200 bg-green-50 p-3 text-sm text-green-800">
+                {successMessage}
+              </div>
+            )}
 
             <button
               type="button"
@@ -423,7 +444,11 @@ function Auth({ onLogin }) {
               disabled={loading || resendSeconds > 0}
               className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {resendSeconds > 0 ? `Resend OTP in ${resendSeconds}s` : "Resend OTP"}
+              {resendingType === "signup"
+                ? "Resending..."
+                : resendSeconds > 0
+                  ? `Resend OTP in ${resendSeconds}s`
+                  : "Resend OTP"}
             </button>
           </div>
         </div>
@@ -479,7 +504,6 @@ function Auth({ onLogin }) {
                 {error}
               </div>
             )}
-
             <button
               type="submit"
               disabled={loading}
@@ -539,6 +563,11 @@ function Auth({ onLogin }) {
                 {error}
               </div>
             )}
+            {successMessage && (
+              <div role="status" className="rounded-xl border border-green-200 bg-green-50 p-3 text-sm text-green-800">
+                {successMessage}
+              </div>
+            )}
 
             <button
               type="button"
@@ -555,7 +584,11 @@ function Auth({ onLogin }) {
               disabled={loading || resendSeconds > 0}
               className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {resendSeconds > 0 ? `Resend OTP in ${resendSeconds}s` : "Resend OTP"}
+              {resendingType === "reset"
+                ? "Resending..."
+                : resendSeconds > 0
+                  ? `Resend OTP in ${resendSeconds}s`
+                  : "Resend OTP"}
             </button>
           </div>
         </div>
@@ -869,7 +902,14 @@ function Auth({ onLogin }) {
         {mode === "register" && (
           <p className="mt-4 text-xs leading-5 text-slate-500">
             Can't find your institution or campus? Contact Campus Connect
-            support to request that it be added.
+            support at{" "}
+            <a
+              href="mailto:support@campus-connect.com.ng"
+              className="font-semibold text-blue-700 underline underline-offset-2 hover:text-blue-800"
+            >
+              support@campus-connect.com.ng
+            </a>{" "}
+            to request that it be added.
           </p>
         )}
       </div>

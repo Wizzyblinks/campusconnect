@@ -1,10 +1,13 @@
 import mongoose from "mongoose";
 import Conversation from "../models/Conversation.js";
+import CampusService from "../models/CampusService.js";
+import CampusServiceActivity from "../models/CampusServiceActivity.js";
 import Dispute from "../models/Dispute.js";
 import MarketplaceListing from "../models/MarketplaceListing.js";
 import Order from "../models/Order.js";
 import Post from "../models/Post.js";
 import PostReport from "../models/PostReport.js";
+import ServiceRequest from "../models/ServiceRequest.js";
 import User from "../models/User.js";
 
 const adminScope = (user) => ({
@@ -21,7 +24,7 @@ export const getAdminOverview = async (req, res) => {
   try {
     const scope = adminScope(req.user);
     const campusUserIds = await User.distinct("_id", scope);
-    const [totalUsers, verifiedStudents, onlineUsers, totalPosts, activeListings, totalOrders, openDisputes] = await Promise.all([
+    const [totalUsers, verifiedStudents, onlineUsers, totalPosts, activeListings, totalOrders, openDisputes, serviceSummary, serviceRequests, serviceActivityCount] = await Promise.all([
       User.countDocuments(scope),
       User.countDocuments({ ...scope, isVerifiedStudent: true }),
       User.countDocuments({ ...scope, isOnline: true }),
@@ -32,7 +35,43 @@ export const getAdminOverview = async (req, res) => {
         $or: [{ buyer: { $in: campusUserIds } }, { seller: { $in: campusUserIds } }],
         status: { $in: ["OPEN", "UNDER_REVIEW"] },
       }),
+      CampusService.aggregate([
+        { $match: scope },
+        {
+          $facet: {
+            counts: [{
+              $group: {
+                _id: null,
+                total: { $sum: 1 },
+                active: { $sum: { $cond: ["$active", 1, 0] } },
+                views: { $sum: "$views" },
+              },
+            }],
+            popularCategories: [
+              { $group: { _id: "$category", count: { $sum: 1 }, views: { $sum: "$views" } } },
+              { $sort: { views: -1, count: -1, _id: 1 } },
+              { $limit: 5 },
+            ],
+          },
+        },
+      ]),
+      ServiceRequest.aggregate([
+        { $match: scope },
+        { $group: { _id: "$status", count: { $sum: 1 } } },
+      ]),
+      CampusServiceActivity.countDocuments({
+        ...scope,
+        createdAt: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) },
+      }),
     ]);
+    const serviceCounts = serviceSummary[0]?.counts[0] || {
+      total: 0,
+      active: 0,
+      views: 0,
+    };
+    const requestCounts = Object.fromEntries(
+      serviceRequests.map(({ _id, count }) => [_id.toLowerCase(), count]),
+    );
     return res.json({
       scope: "Your campus",
       counts: {
@@ -44,7 +83,16 @@ export const getAdminOverview = async (req, res) => {
         activeListings,
         totalOrders,
         openDisputes,
+        totalServices: serviceCounts.total,
+        activeServices: serviceCounts.active,
+        inactiveServices: Math.max(0, serviceCounts.total - serviceCounts.active),
+        serviceViews: serviceCounts.views,
+        pendingServiceRequests: requestCounts.pending || 0,
+        approvedServiceRequests: requestCounts.approved || 0,
+        rejectedServiceRequests: requestCounts.rejected || 0,
+        serviceActivityLast30Days: serviceActivityCount,
       },
+      popularServiceCategories: serviceSummary[0]?.popularCategories || [],
     });
   } catch (error) {
     console.error("Admin overview error:", error.message);
@@ -98,6 +146,136 @@ export const getAdminUsers = async (req, res) => {
   } catch (error) {
     console.error("Admin user list error:", error.message);
     return res.status(500).json({ message: "Failed to load users" });
+  }
+};
+
+export const getAdminPosts = async (req, res) => {
+  try {
+    const page = Number(req.query.page || 1);
+    const limit = Number(req.query.limit || 20);
+    if (
+      !Number.isInteger(page) ||
+      page < 1 ||
+      !Number.isInteger(limit) ||
+      limit < 1 ||
+      limit > 100
+    ) {
+      return res.status(400).json({ message: "Invalid post list filters" });
+    }
+    const filter = { ...adminScope(req.user), isDeleted: { $ne: true } };
+    const [posts, total] = await Promise.all([
+      Post.find(filter)
+        .select("author text visibility media.url media.type createdAt moderatedBy moderatedAt moderationReason")
+        .populate("author", "name profile.avatar")
+        .populate("moderatedBy", "name")
+        .sort({ createdAt: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .lean(),
+      Post.countDocuments(filter),
+    ]);
+    return res.json({
+      posts,
+      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    });
+  } catch (error) {
+    console.error("Admin post list error:", error.message);
+    return res.status(500).json({ message: "Failed to load posts" });
+  }
+};
+
+export const moderateAdminPost = async (req, res) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id)) {
+      return res.status(400).json({ message: "Invalid post ID" });
+    }
+    const { reason = "" } = req.body || {};
+    if (typeof reason !== "string" || reason.trim().length > 300) {
+      return res.status(400).json({ message: "Moderation reason must be 300 characters or fewer" });
+    }
+    const post = await Post.findOneAndUpdate(
+      { _id: req.params.id, ...adminScope(req.user), isDeleted: { $ne: true } },
+      {
+        $set: {
+          isDeleted: true,
+          text: "",
+          hashtags: [],
+          moderatedBy: req.user._id,
+          moderatedAt: new Date(),
+          moderationReason: reason.trim(),
+        },
+      },
+      { returnDocument: "after" },
+    );
+    if (!post) return res.status(404).json({ message: "Post not found" });
+    return res.json({ message: "Post removed from Campus Connect." });
+  } catch (error) {
+    console.error("Admin post moderation error:", error.message);
+    return res.status(500).json({ message: "Failed to remove post" });
+  }
+};
+
+export const getAdminListings = async (req, res) => {
+  try {
+    const page = Number(req.query.page || 1);
+    const limit = Number(req.query.limit || 20);
+    if (
+      !Number.isInteger(page) ||
+      page < 1 ||
+      !Number.isInteger(limit) ||
+      limit < 1 ||
+      limit > 100
+    ) {
+      return res.status(400).json({ message: "Invalid listing filters" });
+    }
+    const filter = adminScope(req.user);
+    const [listings, total] = await Promise.all([
+      MarketplaceListing.find(filter)
+        .select("title description price category images condition stock status seller createdAt moderatedBy moderatedAt moderationReason")
+        .populate("seller", "name profile.avatar")
+        .populate("moderatedBy", "name")
+        .sort({ createdAt: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .lean(),
+      MarketplaceListing.countDocuments(filter),
+    ]);
+    return res.json({
+      listings,
+      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    });
+  } catch (error) {
+    console.error("Admin listing list error:", error.message);
+    return res.status(500).json({ message: "Failed to load marketplace listings" });
+  }
+};
+
+export const moderateAdminListing = async (req, res) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id)) {
+      return res.status(400).json({ message: "Invalid listing ID" });
+    }
+    const { reason = "" } = req.body || {};
+    if (typeof reason !== "string" || reason.trim().length > 300) {
+      return res.status(400).json({ message: "Moderation reason must be 300 characters or fewer" });
+    }
+    const listing = await MarketplaceListing.findOneAndUpdate(
+      { _id: req.params.id, ...adminScope(req.user) },
+      {
+        $set: {
+          status: "hidden",
+          moderatedBy: req.user._id,
+          moderatedAt: new Date(),
+          moderationReason: reason.trim(),
+        },
+      },
+      { returnDocument: "after" },
+    );
+    if (!listing) return res.status(404).json({ message: "Listing not found" });
+    return res.json({ message: "Marketplace listing removed." });
+  } catch (error) {
+    console.error("Admin listing moderation error:", error.message);
+    return res.status(500).json({ message: "Failed to remove marketplace listing" });
   }
 };
 

@@ -78,6 +78,21 @@ const marketplaceListingSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    moderatedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+    moderatedAt: {
+      type: Date,
+      default: null,
+    },
+    moderationReason: {
+      type: String,
+      trim: true,
+      maxlength: 300,
+      default: "",
+    },
   },
   {
     timestamps: true,

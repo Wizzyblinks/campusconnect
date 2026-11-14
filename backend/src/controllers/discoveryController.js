@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 import Institution from "../models/Institution.js";
 import User from "../models/User.js";
 import FollowRequest from "../models/FollowRequest.js";
+import HiddenPost from "../models/HiddenPost.js";
 import Post from "../models/Post.js";
 import VibeCheckInteraction from "../models/VibeCheckInteraction.js";
 import { accessiblePostFilter } from "../services/postAccess.js";
@@ -35,7 +36,6 @@ export const getStudentSuggestions = async (req, res) => {
     };
     if (mode === "campus") {
       filter.campus = req.user.campus;
-      filter["privacy.profileVisibility"] = { $ne: "private" };
     } else {
       filter["privacy.profileVisibility"] = "public";
       if (institutionId) {
@@ -121,7 +121,16 @@ export const getPublicProfile = async (req, res) => {
       following: user._id,
       status: "ACCEPTED",
     });
-    if (!canViewProfile(req.user, user, Boolean(viewerFollows))) {
+    const canViewFullProfile = canViewProfile(
+      req.user,
+      user,
+      Boolean(viewerFollows),
+    );
+    if (
+      !canViewFullProfile &&
+      (user.privacy?.profileVisibility !== "private" ||
+        user.privacy?.discoverable === false)
+    ) {
       return res.status(404).json({ message: "This profile isn't available." });
     }
     const [institution, followState, followersCount, followingCount] =
@@ -131,10 +140,13 @@ export const getPublicProfile = async (req, res) => {
         FollowRequest.countDocuments({ following: user._id, status: "ACCEPTED" }),
         FollowRequest.countDocuments({ follower: user._id, status: "ACCEPTED" }),
       ]);
-    const posts = await Post.find({
+    const hiddenPostIds = await HiddenPost.distinct("post", { user: req.user._id });
+    const profilePostFilter = {
       ...accessiblePostFilter(req.user),
       author: user._id,
-    })
+    };
+    if (hiddenPostIds.length) profilePostFilter._id = { $nin: hiddenPostIds };
+    const posts = await Post.find(profilePostFilter)
       .select("text media createdAt")
       .sort({ createdAt: -1 })
       .limit(20)
@@ -144,17 +156,25 @@ export const getPublicProfile = async (req, res) => {
         id: user._id,
         name: user.name,
         avatar: user.profile?.avatar || "",
-        bio: user.profile?.bio || "",
-        department: user.profile?.department || "",
-        level: user.profile?.level || "",
+        bio: canViewFullProfile ? user.profile?.bio || "" : "",
+        department: canViewFullProfile ? user.profile?.department || "" : "",
+        level: canViewFullProfile ? user.profile?.level || "" : "",
         isVerifiedStudent: user.isVerifiedStudent,
+        isPrivate: user.privacy?.profileVisibility === "private",
         institution: institution?.name || "",
         campus: institution?.campuses.find((item) => String(item._id) === String(user.campus))?.name || "",
         followStatus: followState?.status || "NONE",
         isFollowing: Boolean(viewerFollows),
         followersCount,
         followingCount,
-        posts: posts.map((post) => ({ id: post._id, text: post.text, media: post.media, createdAt: post.createdAt })),
+        posts: canViewFullProfile
+          ? posts.map((post) => ({
+              id: post._id,
+              text: post.text,
+              media: post.media,
+              createdAt: post.createdAt,
+            }))
+          : [],
       },
     });
   } catch (error) {

@@ -17,6 +17,7 @@ const sections = [
   { id: "Seller applications", icon: Store },
   { id: "Campus Services", icon: Store },
   { id: "Campus News", icon: Newspaper },
+  { id: "Content moderation", icon: ShieldAlert },
   { id: "Reports", icon: ShieldAlert },
   { id: "Disputes", icon: ShoppingBag },
 ];
@@ -47,6 +48,11 @@ function AdminDashboard() {
   const [reports, setReports] = useState([]);
   const [vibeReports, setVibeReports] = useState([]);
   const [postReports, setPostReports] = useState([]);
+  const [moderationPosts, setModerationPosts] = useState([]);
+  const [moderationListings, setModerationListings] = useState([]);
+  const [contentPage, setContentPage] = useState(1);
+  const [postPagination, setPostPagination] = useState(null);
+  const [listingPagination, setListingPagination] = useState(null);
   const [disputes, setDisputes] = useState([]);
   const [sellerApplications, setSellerApplications] = useState([]);
   const [sellerApplicationsPage, setSellerApplicationsPage] = useState(1);
@@ -158,6 +164,29 @@ function AdminDashboard() {
     }
   }, []);
 
+  const loadModeratedContent = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const params = new URLSearchParams({
+        page: String(contentPage),
+        limit: "20",
+      });
+      const [postData, listingData] = await Promise.all([
+        apiRequest(`/api/admin/posts?${params}`),
+        apiRequest(`/api/admin/marketplace-listings?${params}`),
+      ]);
+      setModerationPosts(postData.posts || []);
+      setModerationListings(listingData.listings || []);
+      setPostPagination(postData.pagination || null);
+      setListingPagination(listingData.pagination || null);
+    } catch (requestError) {
+      setError(requestError.message || "Could not load content for moderation.");
+    } finally {
+      setLoading(false);
+    }
+  }, [contentPage]);
+
   useEffect(() => {
     loadOverview();
   }, [loadOverview]);
@@ -167,9 +196,10 @@ function AdminDashboard() {
     if (section === "Users") loadUsers();
     if (section === "Campus News") loadNews();
     if (section === "Reports") loadReports();
+    if (section === "Content moderation") loadModeratedContent();
     if (section === "Disputes") loadDisputes();
     if (section === "Seller applications") loadSellerApplications();
-  }, [authorized, section, loadNews, loadReports, loadUsers, loadDisputes, loadSellerApplications]);
+  }, [authorized, section, loadNews, loadReports, loadUsers, loadDisputes, loadSellerApplications, loadModeratedContent]);
 
   useEffect(() => {
     setUserPage(1);
@@ -335,6 +365,32 @@ function AdminDashboard() {
     }
   }
 
+  async function removeModeratedContent(type, item) {
+    const label = type === "post" ? "post" : "marketplace listing";
+    const title = type === "post"
+      ? item.text?.slice(0, 100) || "Post with media"
+      : item.title;
+    if (!window.confirm(`Remove this ${label}: "${title}"?`)) return;
+    const reason = window.prompt("Optional moderation reason (up to 300 characters):");
+    if (reason === null) return;
+
+    setError("");
+    setNotice("");
+    try {
+      const endpoint = type === "post"
+        ? `/api/admin/posts/${item._id}`
+        : `/api/admin/marketplace-listings/${item._id}`;
+      const data = await apiRequest(endpoint, {
+        method: "DELETE",
+        body: JSON.stringify({ reason }),
+      });
+      setNotice(data.message || `${label} removed.`);
+      await loadModeratedContent();
+    } catch (requestError) {
+      setError(requestError.message || `Could not remove this ${label}.`);
+    }
+  }
+
   if (checkingAccess) {
     return (
       <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500">
@@ -426,6 +482,11 @@ function AdminDashboard() {
                   ["Active listings", overview.counts.activeListings],
                   ["Orders", overview.counts.totalOrders],
                   ["Open disputes", overview.counts.openDisputes],
+                  ["Campus services", overview.counts.totalServices],
+                  ["Active services", overview.counts.activeServices],
+                  ["Pending service requests", overview.counts.pendingServiceRequests],
+                  ["Service views", overview.counts.serviceViews],
+                  ["Service actions · 30 days", overview.counts.serviceActivityLast30Days],
                 ].map(([label, value]) => (
                   <article key={label} className="rounded-2xl border border-slate-200 bg-white p-5">
                     <p className="text-sm font-semibold text-slate-500">{label}</p>
@@ -433,6 +494,21 @@ function AdminDashboard() {
                   </article>
                 ))}
               </div>
+              <section className="rounded-2xl border border-slate-200 bg-white p-5">
+                <h3 className="font-extrabold">Most-viewed service categories</h3>
+                <p className="mt-1 text-sm text-slate-500">Based on service listing views and listing volume at your campus.</p>
+                {overview.popularServiceCategories?.length ? (
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {overview.popularServiceCategories.map((category) => (
+                      <span key={category._id} className="rounded-full bg-blue-50 px-3 py-1.5 text-sm font-semibold text-blue-800">
+                        {category._id} · {category.views} views
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="mt-4 text-sm text-slate-500">No service activity has been recorded yet.</p>
+                )}
+              </section>
               <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                 {sections.slice(1).map(({ id, icon: Icon }) => (
                   <button key={id} type="button" onClick={() => setSection(id)} className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white p-4 text-left font-bold hover:border-blue-300 hover:bg-blue-50">
@@ -616,6 +692,81 @@ function AdminDashboard() {
                 </article>
               ))}
             </div>
+          )}
+        </div>
+      )}
+
+      {section === "Content moderation" && (
+        <div className="space-y-5">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h4 className="text-lg font-extrabold">Campus content</h4>
+              <p className="mt-1 text-sm text-slate-500">Review posts and marketplace listings across your campus. Removed listings are hidden from buyers and cannot be purchased.</p>
+            </div>
+            <button type="button" onClick={loadModeratedContent} className="shrink-0 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold">Refresh</button>
+          </div>
+          {loading ? (
+            <p className="rounded-xl bg-white p-6 text-center text-sm text-slate-500">Loading campus content...</p>
+          ) : (
+            <>
+              <section className="rounded-2xl border border-slate-200 bg-white p-5">
+                <h5 className="font-extrabold">Posts</h5>
+                {moderationPosts.length === 0 ? (
+                  <p className="py-5 text-sm text-slate-500">No posts to review.</p>
+                ) : (
+                  <div className="mt-3 divide-y divide-slate-100">
+                    {moderationPosts.map((post) => (
+                      <article key={post._id} className="flex flex-col gap-3 py-4 sm:flex-row sm:items-start sm:justify-between">
+                        <div className="min-w-0">
+                          <p className="text-sm font-bold">{post.author?.name || "Student"} · {dateLabel(post.createdAt)}</p>
+                          {post.text && <p className="mt-2 whitespace-pre-wrap break-words text-sm text-slate-700">{post.text}</p>}
+                          {post.media?.url && (
+                            post.media.type === "video"
+                              ? <video src={post.media.url} controls className="mt-3 max-h-48 max-w-full rounded-lg bg-black" />
+                              : <img src={post.media.url} alt="Post attachment" className="mt-3 max-h-48 max-w-full rounded-lg object-contain" />
+                          )}
+                        </div>
+                        <button type="button" onClick={() => removeModeratedContent("post", post)} className="shrink-0 rounded-lg border border-red-200 px-3 py-2 text-xs font-bold text-red-700">Remove post</button>
+                      </article>
+                    ))}
+                  </div>
+                )}
+              </section>
+              <section className="rounded-2xl border border-slate-200 bg-white p-5">
+                <h5 className="font-extrabold">Marketplace listings</h5>
+                {moderationListings.length === 0 ? (
+                  <p className="py-5 text-sm text-slate-500">No listings to review.</p>
+                ) : (
+                  <div className="mt-3 divide-y divide-slate-100">
+                    {moderationListings.map((listing) => (
+                      <article key={listing._id} className="flex flex-col gap-3 py-4 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="min-w-0">
+                          <p className="break-words font-bold">{listing.title}</p>
+                          <p className="mt-1 text-xs text-slate-500">{listing.seller?.name || "Student"} · ₦{Number(listing.price || 0).toLocaleString()} · {listing.status} · {dateLabel(listing.createdAt)}</p>
+                          {listing.moderatedBy?.name && <p className="mt-1 text-xs text-red-700">Removed by {listing.moderatedBy.name}{listing.moderationReason ? `: ${listing.moderationReason}` : ""}</p>}
+                        </div>
+                        {listing.moderatedAt ? (
+                          <span className="shrink-0 rounded-lg bg-slate-100 px-3 py-2 text-xs font-bold text-slate-600">Removed</span>
+                        ) : (
+                          <button type="button" onClick={() => removeModeratedContent("listing", listing)} className="shrink-0 rounded-lg border border-red-200 px-3 py-2 text-xs font-bold text-red-700">Remove listing</button>
+                        )}
+                      </article>
+                    ))}
+                  </div>
+                )}
+              </section>
+              {((postPagination?.totalPages || 1) > 1 || (listingPagination?.totalPages || 1) > 1) && (
+                <div className="flex items-center justify-between border-t border-slate-200 pt-4 text-sm">
+                  <span className="text-slate-500">
+                    Page {contentPage} of {Math.max(postPagination?.totalPages || 1, listingPagination?.totalPages || 1)}
+                  </span>
+                  <div className="flex gap-2">
+                    <button type="button" disabled={contentPage <= 1} onClick={() => setContentPage((page) => page - 1)} className="min-h-10 rounded-lg border border-slate-200 px-3 disabled:opacity-40">Previous</button>
+                    <button type="button" disabled={contentPage >= Math.max(postPagination?.totalPages || 1, listingPagination?.totalPages || 1)} onClick={() => setContentPage((page) => page + 1)} className="min-h-10 rounded-lg border border-slate-200 px-3 disabled:opacity-40">Next</button>
+                  </div>
+                </div>
+              )}
+            </>
           )}
         </div>
       )}

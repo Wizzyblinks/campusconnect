@@ -37,6 +37,9 @@ import {
   Heart,
   MessageSquare,
   Share2,
+  MoreVertical,
+  EyeOff,
+  Upload,
   GraduationCap,
   ShieldCheck,
   Compass,
@@ -104,6 +107,7 @@ const normalizePost = (post, institutionLabel = "Campus Connect Student") => {
     visibility: post.visibility || "campus",
     color: "bg-blue-600",
     verified: Boolean(author.isVerifiedStudent),
+    avatar: author.profile?.avatar || "",
     media: post.media,
   };
 };
@@ -135,8 +139,17 @@ function App() {
   const [trendingError, setTrendingError] = useState("");
   const [trendingLoading, setTrendingLoading] = useState(false);
   const [feedPage, setFeedPage] = useState(1);
+  const [feedSeed, setFeedSeed] = useState(() => Math.random().toString(36).slice(2, 12));
   const [feedHasMore, setFeedHasMore] = useState(false);
   const [feedLoadingMore, setFeedLoadingMore] = useState(false);
+  const [postMenuOpenId, setPostMenuOpenId] = useState("");
+  const [hiddenPosts, setHiddenPosts] = useState([]);
+  const [hiddenPostsLoading, setHiddenPostsLoading] = useState(false);
+  const [hiddenPostsError, setHiddenPostsError] = useState("");
+  const [avatarFile, setAvatarFile] = useState(null);
+  const [avatarPreview, setAvatarPreview] = useState("");
+  const [avatarUploading, setAvatarUploading] = useState(false);
+  const avatarFileInput = useRef(null);
   const [postActionError, setPostActionError] = useState("");
   const [postActionNotice, setPostActionNotice] = useState("");
   const [pendingPostLikes, setPendingPostLikes] = useState(() => new Set());
@@ -164,11 +177,36 @@ function App() {
   const [notificationsReload, setNotificationsReload] = useState(0);
   const notificationIds = useRef(new Set());
   const profileRequestId = useRef(0);
+  const seenPostIds = useRef(new Set());
+  const seenPostUserId = useRef("");
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", theme === "dark");
     persistThemePreference(theme);
   }, [theme]);
+
+  useEffect(() => {
+    if (!avatarPreview) return undefined;
+    return () => URL.revokeObjectURL(avatarPreview);
+  }, [avatarPreview]);
+
+  useEffect(() => {
+    if (!user || activePage !== "Profile") return undefined;
+    let cancelled = false;
+    setHiddenPostsLoading(true);
+    setHiddenPostsError("");
+    apiRequest("/api/posts/hidden")
+      .then((data) => {
+        if (!cancelled) setHiddenPosts(Array.isArray(data.posts) ? data.posts : []);
+      })
+      .catch((error) => {
+        if (!cancelled) setHiddenPostsError(error.message || "We couldn't load hidden posts.");
+      })
+      .finally(() => {
+        if (!cancelled) setHiddenPostsLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [activePage, user]);
 
   useEffect(() => {
     let active = true;
@@ -330,11 +368,49 @@ function App() {
   }, [messageSocket]);
 
   useEffect(() => {
+    const userId = String(user?._id || user?.id || "");
+    if (!userId) {
+      seenPostUserId.current = "";
+      seenPostIds.current = new Set();
+      return;
+    }
+    if (seenPostUserId.current === userId) return;
+    seenPostUserId.current = userId;
+    try {
+      const saved = JSON.parse(sessionStorage.getItem(`campus-connect-seen-posts:${userId}`) || "[]");
+      seenPostIds.current = new Set(Array.isArray(saved) ? saved.filter((id) => typeof id === "string") : []);
+    } catch {
+      seenPostIds.current = new Set();
+    }
+  }, [user]);
+
+  useEffect(() => {
+    const userId = String(user?._id || user?.id || "");
+    if (!userId || seenPostUserId.current !== userId) return;
+    posts.forEach((post) => seenPostIds.current.add(String(post.id)));
+    while (seenPostIds.current.size > 500) {
+      const oldest = seenPostIds.current.values().next().value;
+      seenPostIds.current.delete(oldest);
+    }
+    try {
+      sessionStorage.setItem(
+        `campus-connect-seen-posts:${userId}`,
+        JSON.stringify([...seenPostIds.current]),
+      );
+    } catch {
+      // The feed remains usable when session storage is disabled.
+    }
+  }, [posts, user]);
+
+  useEffect(() => {
     if (!user || !localStorage.getItem("token")) return undefined;
     let cancelled = false;
     setPostsLoading(true);
     setPostsError("");
-    apiRequest("/api/posts")
+    const params = new URLSearchParams({ seed: feedSeed });
+    const excludedIds = [...seenPostIds.current].slice(-500);
+    if (excludedIds.length) params.set("exclude", excludedIds.join(","));
+    apiRequest(`/api/posts?${params}`)
       .then((data) => {
         if (!cancelled) {
           const label =
@@ -353,7 +429,7 @@ function App() {
         if (!cancelled) setPostsLoading(false);
       });
     return () => { cancelled = true; };
-  }, [user, postsReload]);
+  }, [user, postsReload, feedSeed]);
 
   useEffect(() => {
     if (!user || activePage !== "Home Feed") return undefined;
@@ -928,6 +1004,82 @@ function App() {
       setProfileError(error.message || "We couldn't save your profile settings.");
     } finally {
       setProfileSaving(false);
+    }
+  }
+
+  function chooseProfileAvatar(event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+      setProfileError("Choose a JPG, PNG, or WebP profile picture.");
+      event.target.value = "";
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setProfileError("Profile pictures must be 5 MB or smaller.");
+      event.target.value = "";
+      return;
+    }
+    setProfileError("");
+    setAvatarFile(file);
+    setAvatarPreview(URL.createObjectURL(file));
+  }
+
+  async function uploadProfileAvatar() {
+    if (!avatarFile || avatarUploading) return;
+    setAvatarUploading(true);
+    setProfileError("");
+    setProfileNotice("");
+    const body = new FormData();
+    body.append("avatar", avatarFile);
+    try {
+      const data = await apiRequest("/api/profile/avatar", {
+        method: "POST",
+        body,
+      });
+      const updatedUser = { ...user, ...data.user };
+      setUser(updatedUser);
+      localStorage.setItem("user", JSON.stringify(updatedUser));
+      const userId = String(updatedUser._id || updatedUser.id);
+      setPosts((current) => current.map((post) =>
+        post.authorId === userId ? { ...post, avatar: data.user.profile?.avatar || "" } : post,
+      ));
+      setAvatarFile(null);
+      setAvatarPreview("");
+      if (avatarFileInput.current) avatarFileInput.current.value = "";
+      setProfileNotice("Your profile picture has been updated.");
+    } catch (error) {
+      setProfileError(error.message || "We couldn't upload your profile picture.");
+    } finally {
+      setAvatarUploading(false);
+    }
+  }
+
+  async function hidePost(post) {
+    setPostActionError("");
+    setPostMenuOpenId("");
+    try {
+      const data = await apiRequest(`/api/posts/${post.id}/hide`, { method: "POST" });
+      setPosts((current) => current.filter((item) => item.id !== post.id));
+      setFeedSeed(Math.random().toString(36).slice(2, 12));
+      setPostsReload((current) => current + 1);
+      setPostActionNotice(data.message || "This post has been hidden from your feed.");
+    } catch (error) {
+      setPostActionError(error.message || "We couldn't hide this post.");
+    }
+  }
+
+  async function restoreHiddenPost(postId) {
+    setHiddenPostsError("");
+    try {
+      const data = await apiRequest(`/api/posts/${postId}/hide`, { method: "DELETE" });
+      setHiddenPosts((current) => current.filter((item) => String(item._id) !== String(postId)));
+      seenPostIds.current.delete(String(postId));
+      setFeedSeed(Math.random().toString(36).slice(2, 12));
+      setPostsReload((current) => current + 1);
+      setPostActionNotice(data.message || "This post can appear in your feed again.");
+    } catch (error) {
+      setHiddenPostsError(error.message || "We couldn't restore this post.");
     }
   }
 
@@ -1629,8 +1781,8 @@ function App() {
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
       <header className="sticky top-0 z-50 border-b border-slate-200 bg-white">
-        <div className="mx-auto flex h-16 max-w-[1600px] items-center justify-between gap-3 px-3 sm:gap-4 sm:px-6">
-          <div className="flex shrink-0 items-center gap-2">
+        <div className="mx-auto flex h-16 max-w-[1600px] items-center justify-between gap-1 px-2 sm:gap-4 sm:px-6">
+          <div className="flex min-w-0 shrink items-center gap-1 sm:shrink-0 sm:gap-2">
             <button
               onClick={() => {
                 setMobileMenuOpen((previous) => !previous);
@@ -1646,11 +1798,11 @@ function App() {
             <img
               src={campusConnectLogo}
               alt="Campus Connect logo"
-              className="h-10 w-10 rounded-xl bg-white object-contain"
+              className="h-8 w-8 shrink-0 rounded-xl bg-white object-contain sm:h-10 sm:w-10"
             />
 
             <div>
-              <h1 className="text-lg font-extrabold tracking-tight text-blue-700 sm:text-xl">
+              <h1 className="whitespace-nowrap text-[15px] font-extrabold tracking-tight text-blue-700 sm:text-xl">
                 Campus<span className="text-slate-900">Connect</span>
               </h1>
 
@@ -1664,7 +1816,7 @@ function App() {
             <GlobalSearch onSelect={selectSearchResult} onProfile={openUserProfile} />
           </div>
 
-          <div className="flex shrink-0 items-center gap-2 sm:gap-4">
+          <div className="flex shrink-0 items-center gap-0 sm:gap-4">
             <button
               type="button"
               onClick={() => {
@@ -1674,7 +1826,7 @@ function App() {
               }}
               aria-label="Messages"
               title="Messages"
-              className={`relative rounded-xl p-2.5 transition ${
+              className={`relative rounded-xl p-1.5 transition sm:p-2.5 ${
                 activePage === "Messages"
                   ? "bg-blue-50 text-blue-700"
                   : "text-slate-600 hover:bg-blue-50 hover:text-blue-700"
@@ -1697,7 +1849,7 @@ function App() {
               }}
               aria-label="VibeCheck"
               title="VibeCheck"
-              className={`rounded-xl p-2.5 transition ${
+              className={`hidden rounded-xl p-2.5 transition sm:flex ${
                 activePage === "Campus Match"
                   ? "bg-pink-50 text-pink-600"
                   : "text-slate-600 hover:bg-pink-50 hover:text-pink-600"
@@ -1711,11 +1863,11 @@ function App() {
                 onClick={() => {
                   setNotificationsOpen((previous) => !previous);
                 }}
-                className="relative rounded-xl p-2.5 text-slate-600 transition hover:bg-blue-50 hover:text-blue-700"
+                className="relative rounded-xl p-1.5 text-slate-600 transition hover:bg-blue-50 hover:text-blue-700 sm:p-2.5"
                 aria-label="Notifications"
                 aria-expanded={notificationsOpen}
               >
-                <Bell size={21} />
+                <Bell size={19} className="sm:h-[21px] sm:w-[21px]" />
 
                 {unreadNotifications > 0 && (
                   <span className="absolute -right-0.5 -top-0.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white ring-2 ring-white">
@@ -1805,8 +1957,8 @@ function App() {
 
             <div className="hidden h-8 border-l border-slate-200 sm:block" />
 
-            <button type="button" onClick={() => { setActivePage("Profile"); setSelectedSearchResult(null); }} className="flex items-center gap-2 rounded-xl p-1.5 text-left hover:bg-slate-50">
-              <div className="flex h-9 w-9 items-center justify-center rounded-full bg-blue-100 font-bold text-blue-700">
+            <button type="button" aria-label="Open your profile" onClick={() => { setActivePage("Profile"); setSelectedSearchResult(null); }} className="flex items-center gap-2 rounded-xl p-0.5 text-left hover:bg-slate-50 sm:p-1.5">
+              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-blue-100 text-sm font-bold text-blue-700 sm:h-9 sm:w-9">
                 {userInitials}
               </div>
 
@@ -2008,7 +2160,13 @@ function App() {
             </p>
           </div>
 
-          {activePage === "Campus Services" && <CampusServices />}
+          {activePage === "Campus Services" && (
+            <CampusServices
+              user={user}
+              onOpenProfile={openUserProfile}
+              onMessage={openProfileConversation}
+            />
+          )}
 
           {activePage === "Messages" && (
             <>
@@ -2515,9 +2673,36 @@ function App() {
                 <div className="px-5 pb-6 sm:px-7">
                   <div className="-mt-12 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
                     <div className="flex items-end gap-4">
-                      {user.profile?.avatar
-                        ? <img src={user.profile.avatar} alt={`${fullName}'s profile`} className="h-24 w-24 rounded-3xl border-4 border-white object-cover shadow-sm" />
-                        : <div className="flex h-24 w-24 items-center justify-center rounded-3xl border-4 border-white bg-blue-100 text-2xl font-extrabold text-blue-700 shadow-sm">{userInitials}</div>}
+                      <div className="flex flex-col items-center gap-2">
+                        {(avatarPreview || user.profile?.avatar)
+                          ? <img src={avatarPreview || user.profile.avatar} alt={`${fullName}'s profile`} className="h-24 w-24 rounded-3xl border-4 border-white object-cover shadow-sm" />
+                          : <div className="flex h-24 w-24 items-center justify-center rounded-3xl border-4 border-white bg-blue-100 text-2xl font-extrabold text-blue-700 shadow-sm">{userInitials}</div>}
+                        <input
+                          ref={avatarFileInput}
+                          type="file"
+                          accept="image/jpeg,image/png,image/webp"
+                          onChange={chooseProfileAvatar}
+                          className="sr-only"
+                          aria-label="Choose a profile picture"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => avatarFileInput.current?.click()}
+                          className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-semibold text-blue-700 hover:bg-blue-50"
+                        >
+                          <Upload size={13} /> {user.profile?.avatar ? "Change photo" : "Add photo"}
+                        </button>
+                        {avatarFile && (
+                          <div className="flex flex-wrap justify-center gap-2">
+                            <button type="button" onClick={uploadProfileAvatar} disabled={avatarUploading} className="rounded-lg bg-blue-700 px-3 py-1.5 text-xs font-bold text-white disabled:opacity-50">
+                              {avatarUploading ? "Uploading..." : "Upload photo"}
+                            </button>
+                            <button type="button" onClick={() => { setAvatarFile(null); setAvatarPreview(""); if (avatarFileInput.current) avatarFileInput.current.value = ""; }} disabled={avatarUploading} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold">
+                              Cancel
+                            </button>
+                          </div>
+                        )}
+                      </div>
                       <div className="pb-1">
                         <h3 className="text-xl font-extrabold">{fullName}</h3>
                         <p className="mt-1 text-sm capitalize text-slate-500">
@@ -2625,6 +2810,32 @@ function App() {
                   ))}
                 </div>
               </section>
+              <section className="rounded-3xl border border-slate-200 bg-white p-5 sm:p-7">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-lg font-extrabold">Hidden posts</h3>
+                    <p className="mt-1 text-sm text-slate-500">Hidden posts are removed only from your view. Restore one here if you change your mind.</p>
+                  </div>
+                </div>
+                {hiddenPostsError && <p role="alert" className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-800">{hiddenPostsError}</p>}
+                {hiddenPostsLoading && <p className="mt-4 text-sm text-slate-500">Loading hidden posts...</p>}
+                {!hiddenPostsLoading && hiddenPosts.length === 0 && <p className="mt-4 rounded-xl bg-slate-50 p-3 text-sm text-slate-500">You haven't hidden any posts.</p>}
+                {!hiddenPostsLoading && hiddenPosts.length > 0 && (
+                  <div className="mt-4 divide-y divide-slate-100">
+                    {hiddenPosts.map((post) => (
+                      <div key={post._id} className="flex flex-wrap items-center justify-between gap-3 py-3">
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-semibold">{post.author?.name || "Campus Connect student"}</p>
+                          <p className="mt-1 line-clamp-2 text-sm text-slate-500">{post.text || "Media post"}</p>
+                        </div>
+                        <button type="button" onClick={() => restoreHiddenPost(post._id)} className="min-h-10 shrink-0 rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-blue-700 hover:bg-blue-50">
+                          Restore post
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
               <section id="profile-settings" className="rounded-3xl border border-slate-200 bg-white p-5 sm:p-7">
                 <h3 className="text-lg font-extrabold">Profile and privacy settings</h3>
                 <p className="mt-1 text-sm text-slate-500">Choose what campus students can discover and edit the details shown on your profile.</p>
@@ -2632,7 +2843,6 @@ function App() {
                 {profileError && <p role="alert" className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-800">{profileError}</p>}
                 <form onSubmit={saveProfileSettings} className="mt-5 grid gap-4 sm:grid-cols-2">
                   <label><span className="mb-1.5 block text-sm font-semibold">Display name</span><input name="name" required maxLength={80} defaultValue={user.name || ""} className="w-full rounded-xl border border-slate-200 px-4 py-3" /></label>
-                  <label><span className="mb-1.5 block text-sm font-semibold">Profile picture URL (HTTPS)</span><input name="avatar" type="url" defaultValue={user.profile?.avatar || ""} className="w-full rounded-xl border border-slate-200 px-4 py-3" placeholder="https://..." /></label>
                   <label><span className="mb-1.5 block text-sm font-semibold">Phone</span><input name="phone" maxLength={30} defaultValue={user.profile?.phone || ""} className="w-full rounded-xl border border-slate-200 px-4 py-3" /></label>
                   <label><span className="mb-1.5 block text-sm font-semibold">Department</span><input name="department" maxLength={100} defaultValue={user.profile?.department || ""} className="w-full rounded-xl border border-slate-200 px-4 py-3" /></label>
                   <label><span className="mb-1.5 block text-sm font-semibold">Level</span><input name="level" maxLength={50} defaultValue={user.profile?.level || ""} className="w-full rounded-xl border border-slate-200 px-4 py-3" /></label>
@@ -3342,8 +3552,18 @@ function App() {
                 <h3 className="text-lg font-extrabold">Campus Feed</h3>
                 <div className="flex items-center gap-2">
                   <span className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600">
-                    Latest posts
+                    For you
                   </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFeedSeed(Math.random().toString(36).slice(2, 12));
+                      setPostsReload((current) => current + 1);
+                    }}
+                    className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+                  >
+                    Refresh feed
+                  </button>
                   <button
                     type="button"
                     onClick={() => { setPostNotice(""); setPostComposerOpen(true); }}
@@ -3364,7 +3584,7 @@ function App() {
               {postNotice && <p role="status" className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">{postNotice}</p>}
               {postActionError && <p role="alert" className="mb-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{postActionError}</p>}
               {postActionNotice && <p role="status" className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">{postActionNotice}</p>}
-              {postsError && <div role="alert" className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800"><span>{postsError}</span><button type="button" onClick={() => setPostsReload((current) => current + 1)} className="rounded-lg bg-red-100 px-3 py-2 font-semibold">Try again</button></div>}
+              {postsError && <div role="alert" className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800"><span>{postsError}</span><button type="button" onClick={() => { setFeedSeed(Math.random().toString(36).slice(2, 12)); setPostsReload((current) => current + 1); }} className="rounded-lg bg-red-100 px-3 py-2 font-semibold">Try again</button></div>}
               {postsLoading && <p className="mb-4 text-sm text-slate-500">Loading campus posts...</p>}
               <div className="space-y-5">
                 {filteredPosts.map((post) => (
@@ -3379,7 +3599,9 @@ function App() {
                         aria-label={`Open ${post.name}'s profile`}
                         className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-sm font-bold text-white ${post.color}`}
                       >
-                        {post.initials}
+                        {post.avatar
+                          ? <img src={post.avatar} alt="" className="h-full w-full rounded-full object-cover" />
+                          : post.initials}
                       </button>
 
                       <div className="min-w-0 flex-1">
@@ -3406,9 +3628,30 @@ function App() {
                           <button type="button" onClick={() => removePost(post.id)} className="rounded-lg border border-red-100 px-2.5 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50">Delete</button>
                         </div>
                       )}
-                      {post.authorId !== String(user._id || user.id) && (
-                        <button type="button" onClick={() => reportPost(post.id)} className="shrink-0 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-slate-500 hover:bg-slate-50">Report</button>
-                      )}
+                      <div className="relative shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => setPostMenuOpenId((current) => current === post.id ? "" : post.id)}
+                            aria-label="Post actions"
+                            aria-haspopup="menu"
+                            aria-expanded={postMenuOpenId === post.id}
+                            className="rounded-lg p-2 text-slate-500 hover:bg-slate-50"
+                          >
+                            <MoreVertical size={18} />
+                          </button>
+                          {postMenuOpenId === post.id && (
+                            <div role="menu" className="absolute right-0 top-full z-20 mt-1 min-w-40 rounded-xl border border-slate-200 bg-white p-1 shadow-lg">
+                              <button type="button" role="menuitem" onClick={() => hidePost(post)} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm font-medium hover:bg-slate-50">
+                                <EyeOff size={16} /> Hide post
+                              </button>
+                              {post.authorId !== String(user._id || user.id) && (
+                                <button type="button" role="menuitem" onClick={() => { setPostMenuOpenId(""); reportPost(post.id); }} className="flex w-full items-center rounded-lg px-3 py-2 text-left text-sm font-medium text-slate-600 hover:bg-slate-50">
+                                  Report post
+                                </button>
+                              )}
+                            </div>
+                          )}
+                      </div>
                     </div>
 
                     <p className="mt-4 whitespace-pre-wrap text-sm leading-7 text-slate-700">
@@ -3485,11 +3728,24 @@ function App() {
                   <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center">
                     <Search size={28} className="mx-auto text-slate-400" />
 
-                    <p className="mt-3 font-bold">No matching posts found</p>
+                    <p className="mt-3 font-bold">{posts.length === 0 && !activeTrendTag ? "You're all caught up" : "No matching posts found"}</p>
 
                     <p className="mt-1 text-sm text-slate-500">
-                      Try searching for something else.
+                      {posts.length === 0 && !activeTrendTag
+                        ? "You've seen all posts in this feed. You can show them again whenever you want."
+                        : "Try searching for something else."}
                     </p>
+                    {posts.length === 0 && !activeTrendTag && seenPostIds.current.size > 0 && (
+                      <button type="button" onClick={() => {
+                        seenPostIds.current.clear();
+                        const userId = String(user._id || user.id);
+                        try { sessionStorage.removeItem(`campus-connect-seen-posts:${userId}`); } catch { /* Optional storage. */ }
+                        setFeedSeed(Math.random().toString(36).slice(2, 12));
+                        setPostsReload((current) => current + 1);
+                      }} className="mt-4 rounded-xl bg-blue-700 px-4 py-2.5 text-sm font-bold text-white">
+                        Show posts again
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
@@ -3497,7 +3753,7 @@ function App() {
                 <button type="button" disabled={feedLoadingMore} onClick={async () => {
                   setFeedLoadingMore(true);
                   try {
-                    const data = await apiRequest(`/api/posts?page=${feedPage + 1}`);
+                    const data = await apiRequest(`/api/posts?page=${feedPage + 1}&seed=${encodeURIComponent(feedSeed)}`);
                     const label = institutionName || campusName || "Campus Connect Student";
                     setPosts((current) => {
                       const known = new Set(current.map((post) => post.id));
@@ -3790,6 +4046,7 @@ function App() {
                     <p className="text-sm text-slate-600">{[selectedStudentProfile.institution, selectedStudentProfile.campus].filter(Boolean).join(" · ") || "Campus Connect student"}</p>
                     <p className="mt-1 text-sm text-slate-500">{[selectedStudentProfile.department, selectedStudentProfile.level].filter(Boolean).join(" · ")}</p>
                     {selectedStudentProfile.isVerifiedStudent && <p className="mt-2 text-sm font-semibold text-blue-700">Verified student</p>}
+                    {selectedStudentProfile.isPrivate && !selectedStudentProfile.isFollowing && <p className="mt-2 text-sm text-slate-500">This is a private account. Follow to request access to posts.</p>}
                   </div>
                 </div>
                 {selectedStudentProfile.bio && <p className="mt-4 whitespace-pre-wrap text-sm leading-6 text-slate-700">{selectedStudentProfile.bio}</p>}
@@ -3818,9 +4075,9 @@ function App() {
                     {followActionLoading === String(selectedStudentProfile.id)
                       ? "Saving..."
                       : selectedProfileFollowStatus === "PENDING"
-                        ? "Cancel request"
+                        ? "Requested"
                         : selectedProfileFollowStatus === "ACCEPTED"
-                          ? "Unfollow"
+                          ? "Following"
                           : "Follow"}
                   </button>
                   <button type="button" onClick={() => openProfileConversation(selectedStudentProfile)} className="min-h-10 rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold hover:bg-slate-50">

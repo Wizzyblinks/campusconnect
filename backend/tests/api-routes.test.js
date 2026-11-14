@@ -11,9 +11,20 @@ test("feed and trending routes are mounted and remain authenticated", async (con
   const address = server.address();
   const baseUrl = `http://127.0.0.1:${address.port}`;
 
-  for (const path of ["/api/posts", "/api/search/trending", "/api/notifications"]) {
-    const response = await fetch(`${baseUrl}${path}`);
-    assert.equal(response.status, 401, `${path} should be routed and require authentication`);
+  const protectedRoutes = [
+    ["GET", "/api/posts"],
+    ["GET", "/api/posts/hidden"],
+    ["GET", "/api/search/trending"],
+    ["GET", "/api/notifications"],
+    ["POST", "/api/profile/avatar"],
+    ["GET", "/api/services/mine"],
+    ["GET", "/api/services/requests"],
+    ["POST", "/api/services/requests"],
+    ["GET", "/api/services/admin/requests"],
+  ];
+  for (const [method, path] of protectedRoutes) {
+    const response = await fetch(`${baseUrl}${path}`, { method });
+    assert.equal(response.status, 401, `${method} ${path} should require authentication`);
   }
 
   for (const duplicatedPath of [

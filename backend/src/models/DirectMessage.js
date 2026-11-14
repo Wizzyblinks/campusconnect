@@ -32,6 +32,11 @@ const directMessageSchema = new mongoose.Schema(
       maxlength: 100,
     },
 
+    isRequestMessage: {
+      type: Boolean,
+      default: false,
+    },
+
     messageType: {
       type: String,
       enum: ["TEXT", "IMAGE"],
@@ -58,6 +63,10 @@ directMessageSchema.index(
     unique: true,
     partialFilterExpression: { clientMessageId: { $type: "string" } },
   },
+);
+directMessageSchema.index(
+  { conversation: 1, isRequestMessage: 1 },
+  { unique: true, partialFilterExpression: { isRequestMessage: true } },
 );
 
 const DirectMessage = mongoose.model("DirectMessage", directMessageSchema);

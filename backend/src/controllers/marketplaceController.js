@@ -298,7 +298,7 @@ export const getMyListings = async (req, res) => {
 export const getListingById = async (req, res) => {
   try {
     const listing = await MarketplaceListing.findById(req.params.id)
-      .select("title description price category images condition stock seller status views createdAt updatedAt")
+      .select("title description price category images condition stock seller status views moderatedAt createdAt updatedAt")
       .populate(
       "seller",
       PUBLIC_PROFILE_FIELDS,
@@ -312,8 +312,9 @@ export const getListingById = async (req, res) => {
 
     const listingSellerId = listing.seller?._id || listing.seller;
     if (
-      (listing.status !== "active" || listing.stock <= 0) &&
-      String(listingSellerId) !== String(req.user._id)
+      (listing.moderatedAt && req.user.role !== "admin") ||
+      ((listing.status !== "active" || listing.stock <= 0) &&
+        String(listingSellerId) !== String(req.user._id))
     ) {
       return res.status(404).json({ message: "Listing not found" });
     }
@@ -346,6 +347,11 @@ export const updateListing = async (req, res) => {
     if (listing.seller.toString() !== req.user._id.toString()) {
       return res.status(403).json({
         message: "You can only edit your own listings",
+      });
+    }
+    if (listing.moderatedAt) {
+      return res.status(403).json({
+        message: "This listing was removed by an administrator and can't be edited.",
       });
     }
 
@@ -383,7 +389,11 @@ export const updateListing = async (req, res) => {
       return res.status(400).json({ message: "Choose a valid product condition." });
     }
     if (req.body.status !== undefined) {
-      if (!["active", "hidden"].includes(req.body.status) || listing.status === "sold") {
+      if (
+        !["active", "hidden"].includes(req.body.status) ||
+        listing.status === "sold" ||
+        (listing.moderatedAt && req.body.status === "active")
+      ) {
         return res.status(400).json({ message: "This listing status can't be changed." });
       }
     }

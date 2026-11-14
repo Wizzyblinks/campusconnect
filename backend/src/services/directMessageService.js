@@ -12,6 +12,16 @@ export class MessagingError extends Error {
   }
 }
 
+export const canSendInConversation = (
+  conversation,
+  userId,
+  hasRequestMessage = false,
+) =>
+  conversation?.status === "ACCEPTED" ||
+  (conversation?.status === "PENDING" &&
+    conversation.initiatedBy?.toString() === userId.toString() &&
+    !hasRequestMessage);
+
 export const loadAuthorizedConversation = async (
   conversationId,
   userId,
@@ -45,20 +55,14 @@ export const loadAuthorizedConversation = async (
   }
 
   const [sender, receiver] = await Promise.all([
-    User.findById(userId).select("isRestricted institution role"),
-    User.findById(receiverId).select("isRestricted institution role"),
+    User.findById(userId).select("isRestricted role"),
+    User.findById(receiverId).select("isRestricted role"),
   ]);
   if (!sender || !receiver) {
     throw new MessagingError(404, "Conversation participant not found");
   }
-  if (
-    sender.role !== "student" ||
-    receiver.role !== "student" ||
-    !sender.institution ||
-    !receiver.institution ||
-    sender.institution.toString() !== receiver.institution.toString()
-  ) {
-    throw new MessagingError(403, "Messaging is limited to students at your institution");
+  if (sender.role !== "student" || receiver.role !== "student") {
+    throw new MessagingError(403, "Messaging is limited to student accounts");
   }
   if (sender.isRestricted || receiver.isRestricted) {
     throw new MessagingError(403, "Messaging is unavailable for this account");
@@ -83,20 +87,8 @@ export const persistDirectMessage = async ({
   receiverId,
   content,
   clientMessageId,
+  isRequestMessage = false,
 }) => {
-  const [sender, receiver] = await Promise.all([
-    User.findById(senderId).select("isVerifiedStudent"),
-    User.findById(receiverId).select("isVerifiedStudent"),
-  ]);
-  if (!sender || !receiver) {
-    throw new MessagingError(404, "Conversation participant not found");
-  }
-  if (!sender.isVerifiedStudent && receiver.isVerifiedStudent) {
-    throw new MessagingError(
-      403,
-      "You must be a paid verified user to message a verified student",
-    );
-  }
   if (typeof content !== "string") {
     throw new MessagingError(400, "Message must be text");
   }
@@ -129,6 +121,7 @@ export const persistDirectMessage = async ({
         message,
         messageType: "TEXT",
         clientMessageId,
+        isRequestMessage,
       });
     } catch (error) {
       if (error.code !== 11000) {
@@ -139,6 +132,13 @@ export const persistDirectMessage = async ({
         sender: senderId,
         clientMessageId,
       });
+      if (!savedMessage && isRequestMessage) {
+        throw new MessagingError(
+          409,
+          "A message request can include only one introductory message.",
+        );
+      }
+      if (!savedMessage) throw error;
     }
   }
 

@@ -8,11 +8,14 @@ import {
   deletePost,
   deletePostComment,
   getFeedPosts,
+  getHiddenPosts,
   getPost,
   getPostComments,
+  hidePost,
   likePost,
   reportPost,
   sharePost,
+  unhidePost,
   unlikePost,
   updatePost,
   updatePostComment,
@@ -20,7 +23,10 @@ import {
 
 const router = express.Router();
 
+router.get("/hidden", protect, getHiddenPosts);
 router.get("/", protect, getFeedPosts);
+router.post("/:id/hide", protect, hidePost);
+router.delete("/:id/hide", protect, unhidePost);
 router.get("/:id/comments", protect, getPostComments);
 router.post("/:id/comments", protect, createPostComment);
 router.post("/:id/like", protect, likePost);

@@ -37,6 +37,21 @@ const postSchema = new mongoose.Schema(
       default: false,
       index: true,
     },
+    moderatedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+    moderatedAt: {
+      type: Date,
+      default: null,
+    },
+    moderationReason: {
+      type: String,
+      trim: true,
+      maxlength: 300,
+      default: "",
+    },
     media: {
       url: { type: String, default: "" },
       type: { type: String, enum: ["image", "video"], default: null },

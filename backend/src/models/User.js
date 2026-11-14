@@ -45,6 +45,12 @@ const userSchema = new mongoose.Schema(
         default: "",
       },
 
+      avatarPublicId: {
+        type: String,
+        default: "",
+        select: false,
+      },
+
       phone: {
         type: String,
         default: "",

@@ -67,7 +67,7 @@ export default function StudentSuggestions({ onProfile }) {
         </div>
         <p className="mt-3 text-xs leading-5 text-slate-500">
           {mode === "campus"
-            ? "Students who allow campus discovery and have a visible campus profile appear here."
+            ? "Students who allow campus discovery appear here. Private accounts show limited details until they accept your follow request."
             : "Only students who make their profiles public can be discovered across campuses."}
         </p>
       </div>

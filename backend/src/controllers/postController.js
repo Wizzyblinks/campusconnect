@@ -4,11 +4,18 @@ import PostLike from "../models/PostLike.js";
 import PostShare from "../models/PostShare.js";
 import PostReport from "../models/PostReport.js";
 import Post from "../models/Post.js";
+import FollowRequest from "../models/FollowRequest.js";
+import HiddenPost from "../models/HiddenPost.js";
 import User from "../models/User.js";
 import cloudinary, { isCloudinaryConfigured } from "../config/cloudinary.js";
 import { getPostMediaKind } from "../services/postMediaValidation.js";
-import { accessiblePostFilter, findAccessiblePost } from "../services/postAccess.js";
+import {
+  accessiblePostFilter,
+  findAccessiblePost,
+  hiddenPrivateProfileAuthors,
+} from "../services/postAccess.js";
 import { safelyCreateNotification } from "../services/notificationService.js";
+import { rankFeedCandidates } from "../services/feedRanking.js";
 
 const publicAuthor = "name profile.avatar isVerifiedStudent institution campus";
 const parseTags = (text) =>
@@ -84,19 +91,133 @@ export const getFeedPosts = async (req, res) => {
     if (!Number.isInteger(page) || page < 1 || page > 10000) {
       return res.status(400).json({ message: "Choose a valid feed page." });
     }
+    const seed = typeof req.query.seed === "string" ? req.query.seed : "";
+    const exclude = typeof req.query.exclude === "string" ? req.query.exclude : "";
+    if (seed.length > 32 || exclude.length > 12000) {
+      return res.status(400).json({ message: "Choose a valid feed session." });
+    }
+    const excludedIds = exclude ? exclude.split(",") : [];
+    if (
+      excludedIds.length > 500 ||
+      excludedIds.some((id) => !validateId(id))
+    ) {
+      return res.status(400).json({ message: "Choose a valid feed session." });
+    }
     const filter = accessiblePostFilter(req.user);
-    filter.author = { $nin: await User.find({ isRestricted: true }).distinct("_id") };
-    const posts = await Post.find(filter)
-      .select("-media.publicId")
-      .populate("author", publicAuthor)
-      .sort({ createdAt: -1 })
-      .skip((page - 1) * 20)
-      .limit(20)
-      .lean();
-    return res.json({ posts: await postMetrics(posts, req.user._id), page, hasMore: posts.length === 20 });
+    const [restrictedAuthors, hiddenAuthors, hiddenPostIds] = await Promise.all([
+      User.find({ isRestricted: true }).distinct("_id"),
+      hiddenPrivateProfileAuthors(req.user),
+      HiddenPost.distinct("post", { user: req.user._id }),
+    ]);
+    filter.author = { $nin: [...restrictedAuthors, ...hiddenAuthors] };
+    const excludedPostIds = [...hiddenPostIds, ...excludedIds];
+    if (excludedPostIds.length) filter._id = { $nin: excludedPostIds };
+
+    const candidateLimit = Math.min(1000, Math.max(250, page * 20 + 230));
+    const [candidates, followedAuthors, recentLikes, total] = await Promise.all([
+      Post.find(filter)
+        .select("-media.publicId")
+        .populate("author", publicAuthor)
+        .sort({ createdAt: -1 })
+        .limit(candidateLimit)
+        .lean(),
+      FollowRequest.distinct("following", {
+        follower: req.user._id,
+        status: "ACCEPTED",
+      }),
+      PostLike.find({ user: req.user._id })
+        .sort({ createdAt: -1 })
+        .limit(100)
+        .select("post")
+        .lean(),
+      Post.countDocuments(filter),
+    ]);
+
+    const likedPostIds = recentLikes.map((like) => like.post);
+    const likedPosts = likedPostIds.length
+      ? await Post.find({ _id: { $in: likedPostIds } }).select("hashtags").lean()
+      : [];
+    const interests = new Set([
+      ...(req.user.vibeCheck?.interests || []),
+      ...likedPosts.flatMap((post) => post.hashtags || []),
+    ].map((tag) => tag.toLowerCase().replace(/^#/, "")));
+    const measuredPosts = await postMetrics(candidates, req.user._id);
+    const rankedPosts = rankFeedCandidates({
+      posts: measuredPosts,
+      followedAuthors,
+      interests,
+      currentCampus: req.user.campus,
+      seed: seed || new Date().toISOString().slice(0, 10),
+      page,
+    });
+
+    return res.json({
+      posts: rankedPosts,
+      page,
+      hasMore: page * 20 < Math.min(total, candidateLimit),
+    });
   } catch (error) {
     console.error("Load feed posts failed:", error.message);
     return res.status(500).json({ message: "We couldn't load posts right now." });
+  }
+};
+
+export const getHiddenPosts = async (req, res) => {
+  try {
+    const hiddenIds = await HiddenPost.distinct("post", { user: req.user._id });
+    if (!hiddenIds.length) return res.json({ posts: [] });
+    const filter = accessiblePostFilter(req.user);
+    const [restrictedAuthors, hiddenAuthors] = await Promise.all([
+      User.find({ isRestricted: true }).distinct("_id"),
+      hiddenPrivateProfileAuthors(req.user),
+    ]);
+    filter.author = { $nin: [...restrictedAuthors, ...hiddenAuthors] };
+    filter._id = { $in: hiddenIds };
+    const posts = await Post.find(filter)
+      .select("text author createdAt")
+      .populate("author", "name profile.avatar")
+      .sort({ updatedAt: -1 })
+      .limit(200)
+      .lean();
+    return res.json({ posts });
+  } catch (error) {
+    console.error("Load hidden posts failed:", error.message);
+    return res.status(500).json({ message: "We couldn't load hidden posts right now." });
+  }
+};
+
+export const hidePost = async (req, res) => {
+  try {
+    if (!validateId(req.params.id)) {
+      return res.status(400).json({ message: "That post link is invalid." });
+    }
+    const post = await findAccessiblePost(req.user, req.params.id);
+    if (!post) return res.status(404).json({ message: "Post not found." });
+    await HiddenPost.updateOne(
+      { user: req.user._id, post: post._id },
+      { $setOnInsert: { user: req.user._id, post: post._id } },
+      { upsert: true },
+    );
+    return res.json({ message: "This post is now hidden from your feed." });
+  } catch (error) {
+    if (error.code === 11000) {
+      return res.json({ message: "This post is already hidden from your feed." });
+    }
+    console.error("Hide post failed:", error.message);
+    return res.status(500).json({ message: "We couldn't hide this post. Please try again." });
+  }
+};
+
+export const unhidePost = async (req, res) => {
+  try {
+    if (!validateId(req.params.id)) {
+      return res.status(400).json({ message: "That post link is invalid." });
+    }
+    await HiddenPost.deleteOne({ user: req.user._id, post: req.params.id });
+    return res.json({ message: "This post can appear in your feed again." });
+  } catch (error) {
+    console.error("Unhide post failed:", error.message);
+    return res.status(500).json({ message: "We couldn't restore this post. Please try again." });
   }
 };
 

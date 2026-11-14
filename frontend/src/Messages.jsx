@@ -55,6 +55,7 @@ export default function Messages({
   const [searchError, setSearchError] = useState("");
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
+  const [requestUpdating, setRequestUpdating] = useState(false);
   const [onlineUsers, setOnlineUsers] = useState(new Set());
   const [mobileShowConversation, setMobileShowConversation] = useState(false);
   const [socketConnected, setSocketConnected] = useState(Boolean(socket?.connected));
@@ -90,33 +91,6 @@ export default function Messages({
   useEffect(() => {
     refreshConversations();
   }, [refreshConversations]);
-
-  useEffect(() => {
-    if (
-      !initialConversationId ||
-      !conversations.some(
-        (conversation) => String(conversation._id) === String(initialConversationId),
-      )
-    ) {
-      return;
-    }
-    setActiveId(String(initialConversationId));
-    setMobileShowConversation(true);
-    onInitialConversationHandled?.();
-  }, [initialConversationId, conversations, onInitialConversationHandled]);
-
-  useEffect(() => {
-    if (!initialRecipientId) {
-      handledRecipientRef.current = "";
-      return;
-    }
-    if (loadingConversations || handledRecipientRef.current === String(initialRecipientId)) {
-      return;
-    }
-    handledRecipientRef.current = String(initialRecipientId);
-    startConversation({ _id: String(initialRecipientId) });
-    onInitialRecipientHandled?.();
-  }, [initialRecipientId, loadingConversations, onInitialRecipientHandled, startConversation]);
 
   useEffect(() => {
     socketRef.current = socket;
@@ -202,12 +176,19 @@ export default function Messages({
   }, [activeId, refreshConversations, socket, user._id]);
 
   const activeConversation = useMemo(
-    () => conversations.find((conversation) => conversation._id === activeId),
+    () => conversations.find((conversation) => String(conversation._id) === activeId),
     [activeId, conversations],
   );
   const activeOther = activeConversation
     ? otherParticipant(activeConversation, user._id)
     : null;
+  const isAccepted = activeConversation?.status === "ACCEPTED";
+  const isOutgoingPending =
+    activeConversation?.status === "PENDING" &&
+    String(activeConversation.initiatedBy) === String(user._id);
+  const canSendMessage =
+    isAccepted ||
+    (isOutgoingPending && !loadingMessages && messages.length === 0);
 
   useEffect(() => {
     if (!activeId) {
@@ -283,6 +264,10 @@ export default function Messages({
   }, [search]);
 
   async function openConversation(conversationId) {
+    if (typeof conversationId !== "string" || !conversationId) {
+      setMessageError("This conversation link is invalid.");
+      return;
+    }
     setActiveId(conversationId);
     setMobileShowConversation(true);
     setMessageError("");
@@ -290,14 +275,19 @@ export default function Messages({
   }
 
   const startConversation = useCallback(async (recipient) => {
+    const recipientId = recipient?._id || recipient?.id;
+    if (typeof recipientId !== "string" || !recipientId) {
+      setMessageError("This student account is unavailable.");
+      return;
+    }
     setMessageError("");
     setNotice("");
     try {
       const data = await apiRequest("/api/messages/conversations", {
         method: "POST",
-        body: JSON.stringify({ receiverId: recipient._id }),
+        body: JSON.stringify({ receiverId: recipientId }),
       });
-      const next = await refreshConversations();
+      await refreshConversations();
       const conversation = data.conversation;
       const id = conversation?._id || recipient.conversationId;
       if (id) {
@@ -307,16 +297,62 @@ export default function Messages({
       setSearch("");
       setSearchResults([]);
       setNotice(data.message || "Conversation request sent.");
-      if (next && !next.some((item) => item._id === id) && conversation) {
-        setConversations((current) => [conversation, ...current]);
+      if (conversation) {
+        setConversations((current) =>
+          current.some((item) => String(item._id) === String(id))
+            ? current
+            : [conversation, ...current],
+        );
       }
     } catch (error) {
       setMessageError(error.message || "Could not start the conversation.");
     }
   }, [refreshConversations]);
 
+  useEffect(() => {
+    if (!initialRecipientId) {
+      handledRecipientRef.current = "";
+      return;
+    }
+    if (
+      loadingConversations ||
+      handledRecipientRef.current === String(initialRecipientId)
+    ) {
+      return;
+    }
+    handledRecipientRef.current = String(initialRecipientId);
+    startConversation({ _id: String(initialRecipientId) });
+    onInitialRecipientHandled?.();
+  }, [
+    initialRecipientId,
+    loadingConversations,
+    onInitialRecipientHandled,
+    startConversation,
+  ]);
+
+  useEffect(() => {
+    if (!initialConversationId || loadingConversations) return;
+    const requestedConversation = conversations.find(
+      (conversation) =>
+        String(conversation._id) === String(initialConversationId),
+    );
+    if (requestedConversation) {
+      setActiveId(String(initialConversationId));
+      setMobileShowConversation(true);
+    } else {
+      setMessageError("That conversation is unavailable or you don't have access.");
+    }
+    onInitialConversationHandled?.();
+  }, [
+    initialConversationId,
+    loadingConversations,
+    conversations,
+    onInitialConversationHandled,
+  ]);
+
   async function updateRequest(action) {
-    if (!activeId) return;
+    if (!activeId || requestUpdating) return;
+    setRequestUpdating(true);
     setMessageError("");
     try {
       const data = await apiRequest(
@@ -327,6 +363,8 @@ export default function Messages({
       await refreshConversations();
     } catch (error) {
       setMessageError(error.message || "Could not update the request.");
+    } finally {
+      setRequestUpdating(false);
     }
   }
 
@@ -352,7 +390,7 @@ export default function Messages({
 
   async function sendMessage(event) {
     event.preventDefault();
-    if (!activeId || !draft.trim() || sending) return;
+    if (!activeId || !canSendMessage || !draft.trim() || sending) return;
     const text = draft.trim();
     if (pendingSendRef.current?.content !== text) {
       pendingSendRef.current = {
@@ -389,7 +427,6 @@ export default function Messages({
   const incomingPending = (conversation) =>
     conversation.status === "PENDING" &&
     String(conversation.initiatedBy) !== String(user._id);
-  const isAccepted = activeConversation?.status === "ACCEPTED";
   const unreadTotal = conversations.reduce(
     (total, conversation) => total + (conversation.unreadCount || 0),
     0,
@@ -405,7 +442,7 @@ export default function Messages({
         <div>
           <h3 className="text-xl font-extrabold">Messages</h3>
           <p className="mt-1 text-sm text-slate-500">
-            Private conversations with students at your institution.
+            Private conversations with students across Campus Connect.
           </p>
         </div>
         <span className="mt-3 self-start rounded-full bg-blue-50 px-3 py-1 text-xs font-bold text-blue-700 sm:mt-0">
@@ -572,7 +609,7 @@ export default function Messages({
                       ? onlineUsers.has(String(activeOther?._id))
                         ? "Online"
                         : "Conversation accepted"
-                      : activeConversation.status.toLowerCase()}
+                      : activeConversation.status?.toLowerCase() || "conversation"}
                   </p>
                 </div>
                 <button
@@ -590,10 +627,10 @@ export default function Messages({
                 <div className="flex flex-wrap items-center justify-between gap-3 border-b border-amber-200 bg-amber-50 p-4">
                   <p className="text-sm text-amber-900">Accept this conversation request?</p>
                   <div className="flex gap-2">
-                    <button type="button" onClick={() => updateRequest("accept")} className="inline-flex items-center gap-1 rounded-lg bg-green-700 px-3 py-2 text-xs font-bold text-white">
+                    <button type="button" disabled={requestUpdating} onClick={() => updateRequest("accept")} className="inline-flex items-center gap-1 rounded-lg bg-green-700 px-3 py-2 text-xs font-bold text-white disabled:opacity-50">
                       <Check size={14} /> Accept
                     </button>
-                    <button type="button" onClick={() => updateRequest("decline")} className="inline-flex items-center gap-1 rounded-lg border border-red-200 px-3 py-2 text-xs font-bold text-red-700">
+                    <button type="button" disabled={requestUpdating} onClick={() => updateRequest("decline")} className="inline-flex items-center gap-1 rounded-lg border border-red-200 px-3 py-2 text-xs font-bold text-red-700 disabled:opacity-50">
                       <X size={14} /> Decline
                     </button>
                   </div>
@@ -602,7 +639,9 @@ export default function Messages({
               {activeConversation.status === "PENDING" &&
                 !incomingPending(activeConversation) && (
                   <p className="border-b border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-                    Your request is waiting for the other student. Messages are available after acceptance.
+                    {messages.length === 0
+                      ? "Send one introductory message. You can continue messaging after the other student accepts."
+                      : "Your request is waiting for the other student. You can send more messages after acceptance."}
                   </p>
                 )}
               {activeConversation.status === "REPORTED" && (
@@ -646,19 +685,25 @@ export default function Messages({
                   }}
                   maxLength={2000}
                   rows={1}
-                  disabled={!isAccepted || sending}
+                  disabled={!canSendMessage || sending}
                   onKeyDown={(event) => {
                     if (event.key === "Enter" && !event.shiftKey) {
                       event.preventDefault();
                       event.currentTarget.form?.requestSubmit();
                     }
                   }}
-                  placeholder={isAccepted ? "Write a message..." : "Accept the conversation to message"}
+                  placeholder={
+                    isAccepted
+                      ? "Write a message..."
+                      : canSendMessage
+                        ? "Write your introductory message..."
+                        : "Accept the conversation to message"
+                  }
                   className="max-h-32 min-h-11 flex-1 resize-y rounded-xl border border-slate-200 px-3 py-3 text-sm outline-none focus:border-blue-400 disabled:bg-slate-100"
                 />
                 <button
                   type="submit"
-                  disabled={!isAccepted || !draft.trim() || sending}
+                  disabled={!canSendMessage || !draft.trim() || sending}
                   className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-blue-700 text-white hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-50"
                   aria-label="Send message"
                 >

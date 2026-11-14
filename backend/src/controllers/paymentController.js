@@ -97,6 +97,17 @@ export const initializePayment = async (req, res) => {
       });
     }
 
+    const listing = await MarketplaceListing.findOne({
+      _id: order.listing,
+      status: "active",
+      stock: { $gte: order.quantity },
+    }).select("_id");
+    if (!listing) {
+      return res.status(409).json({
+        message: "This listing is no longer available for purchase.",
+      });
+    }
+
     if (!Number.isFinite(order.totalAmount) || order.totalAmount <= 0) {
       return res.status(400).json({
         message: "Invalid order amount",

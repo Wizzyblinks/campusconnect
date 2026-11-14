@@ -1,6 +1,7 @@
 import DirectMessage from "../models/DirectMessage.js";
 import {
   loadAuthorizedConversation,
+  canSendInConversation,
   MessagingError,
   persistDirectMessage,
 } from "./directMessageService.js";
@@ -26,8 +27,10 @@ const directMessageSocketService = (io, socket) => {
       const { conversation } = await loadAuthorizedConversation(
         conversationId,
         userId,
-        { requireAccepted: true },
       );
+      if (!["ACCEPTED", "PENDING"].includes(conversation.status)) {
+        throw new MessagingError(403, "This conversation request is no longer available.");
+      }
       await socket.join(`conversation:${conversation._id}`);
       if (typeof acknowledge === "function") {
         acknowledge({ conversationId: conversation._id.toString() });
@@ -49,14 +52,37 @@ const directMessageSocketService = (io, socket) => {
       const { conversation, receiverId } = await loadAuthorizedConversation(
         conversationId,
         userId,
-        { requireAccepted: true },
       );
+      const hasRequestMessage = conversation.status === "PENDING"
+        ? Boolean(await DirectMessage.exists({
+            conversation: conversation._id,
+            isRequestMessage: true,
+          }))
+        : false;
+      const isRequestMessageRetry = conversation.status === "PENDING"
+        ? Boolean(await DirectMessage.exists({
+            conversation: conversation._id,
+            sender: userId,
+            clientMessageId,
+            isRequestMessage: true,
+          }))
+        : false;
+      if (
+        !canSendInConversation(conversation, userId, hasRequestMessage) &&
+        !isRequestMessageRetry
+      ) {
+        throw new MessagingError(
+          403,
+          "You can send one introductory message with a request; further messages require acceptance.",
+        );
+      }
       const savedMessage = await persistDirectMessage({
         conversation,
         senderId: userId,
         receiverId,
         content: message,
         clientMessageId,
+        isRequestMessage: conversation.status === "PENDING",
       });
       await safelyCreateNotification({
         io,
@@ -67,7 +93,9 @@ const directMessageSocketService = (io, socket) => {
         message: "Open the conversation to read it.",
         targetType: "conversation",
         targetId: conversation._id,
-        sourceId: savedMessage._id,
+        sourceId: conversation.status === "PENDING"
+          ? conversation._id
+          : savedMessage._id,
       });
       const event = {
         conversationId: conversation._id.toString(),

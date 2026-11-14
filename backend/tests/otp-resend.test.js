@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import test, { mock } from "node:test";
-import nodemailer from "nodemailer";
 import { sendOtpEmail } from "../src/services/emailService.js";
 import {
   hashOtp,
@@ -173,22 +172,20 @@ test("OTP issuance rejects a stored hash that does not match the delivered code"
   );
 });
 
-test("email service fails when the SMTP server does not accept the OTP recipient", async (context) => {
-  const originalEmailUser = process.env.EMAIL_USER;
-  const originalAppPassword = process.env.EMAIL_APP_PASSWORD;
-  process.env.EMAIL_USER = "sender@example.com";
-  process.env.EMAIL_APP_PASSWORD = "test-only-password";
+test("email service reports a Resend API delivery failure", async (context) => {
+  const originalApiKey = process.env.RESEND_API_KEY;
+  process.env.RESEND_API_KEY = "test-only-api-key";
   context.after(() => {
-    if (originalEmailUser === undefined) delete process.env.EMAIL_USER;
-    else process.env.EMAIL_USER = originalEmailUser;
-    if (originalAppPassword === undefined) delete process.env.EMAIL_APP_PASSWORD;
-    else process.env.EMAIL_APP_PASSWORD = originalAppPassword;
+    if (originalApiKey === undefined) delete process.env.RESEND_API_KEY;
+    else process.env.RESEND_API_KEY = originalApiKey;
   });
 
-  const transportMock = mock.method(nodemailer, "createTransport", () => ({
-    sendMail: async () => ({ accepted: [], rejected: ["test@example.com"] }),
+  const fetchMock = mock.method(globalThis, "fetch", async () => ({
+    ok: false,
+    status: 422,
+    json: async () => ({ message: "Recipient rejected" }),
   }));
-  context.after(() => transportMock.mock.restore());
+  context.after(() => fetchMock.mock.restore());
 
   await assert.rejects(
     sendOtpEmail({
@@ -197,26 +194,28 @@ test("email service fails when the SMTP server does not accept the OTP recipient
       purpose: "reset",
       expiresInMinutes: 10,
     }),
-    { code: "EMAIL_RECIPIENT_NOT_ACCEPTED" },
+    { code: "RESEND_API_ERROR", statusCode: 422 },
   );
 });
 
-test("email service succeeds only after SMTP accepts the destination", async (context) => {
-  const originalEmailUser = process.env.EMAIL_USER;
-  const originalAppPassword = process.env.EMAIL_APP_PASSWORD;
-  process.env.EMAIL_USER = "sender@example.com";
-  process.env.EMAIL_APP_PASSWORD = "test-only-password";
+test("email service succeeds only after Resend returns an email ID", async (context) => {
+  const originalApiKey = process.env.RESEND_API_KEY;
+  process.env.RESEND_API_KEY = "test-only-api-key";
   context.after(() => {
-    if (originalEmailUser === undefined) delete process.env.EMAIL_USER;
-    else process.env.EMAIL_USER = originalEmailUser;
-    if (originalAppPassword === undefined) delete process.env.EMAIL_APP_PASSWORD;
-    else process.env.EMAIL_APP_PASSWORD = originalAppPassword;
+    if (originalApiKey === undefined) delete process.env.RESEND_API_KEY;
+    else process.env.RESEND_API_KEY = originalApiKey;
   });
 
-  const transportMock = mock.method(nodemailer, "createTransport", () => ({
-    sendMail: async () => ({ accepted: ["test@example.com"], rejected: [] }),
-  }));
-  context.after(() => transportMock.mock.restore());
+  let request;
+  const fetchMock = mock.method(globalThis, "fetch", async (url, options) => {
+    request = { url, options };
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ id: "resend-test-email" }),
+    };
+  });
+  context.after(() => fetchMock.mock.restore());
 
   assert.equal(
     await sendOtpEmail({
@@ -227,4 +226,6 @@ test("email service succeeds only after SMTP accepts the destination", async (co
     }),
     true,
   );
+  assert.equal(request.url, "https://api.resend.com/emails");
+  assert.deepEqual(JSON.parse(request.options.body).to, ["test@example.com"]);
 });

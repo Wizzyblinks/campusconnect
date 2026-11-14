@@ -8,6 +8,7 @@ import {
   getAccessibleFollowUsers,
   paginateFollowUsers,
 } from "../services/followList.js";
+import { initialFollowStatus } from "../services/followStatus.js";
 
 const findEligibleTarget = async (targetId) => {
   if (!mongoose.isValidObjectId(targetId)) return null;
@@ -84,14 +85,15 @@ export const createFollowRequest = async (req, res) => {
       follower: req.user._id,
       following: target._id,
     });
+    const status = initialFollowStatus(target.privacy?.profileVisibility);
     if (request?.status === "ACCEPTED") {
       return res.json({ message: "You already follow this student.", status: request.status });
     }
-    if (request?.status === "PENDING") {
+    if (request?.status === "PENDING" && status === "PENDING") {
       return res.json({ message: "Your follow request is already pending.", status: request.status });
     }
     if (request) {
-      request.status = "PENDING";
+      request.status = status;
       request.respondedAt = null;
       await request.save();
     } else {
@@ -99,7 +101,7 @@ export const createFollowRequest = async (req, res) => {
         request = await FollowRequest.create({
           follower: req.user._id,
           following: target._id,
-          status: "PENDING",
+          status,
         });
       } catch (error) {
         if (error.code !== 11000) throw error;
@@ -108,26 +110,37 @@ export const createFollowRequest = async (req, res) => {
           following: target._id,
         });
         if (!request) throw error;
-        request.status = "PENDING";
+        if (request.status === "ACCEPTED") {
+          return res.json({
+            message: "You already follow this student.",
+            status: request.status,
+          });
+        }
+        request.status = status;
         request.respondedAt = null;
         await request.save();
       }
     }
 
-    await safelyCreateNotification({
-      io: req.app.get("io"),
-      recipient: target._id,
-      actor: req.user._id,
-      type: "follow_request",
-      title: "New follow request",
-      message: "A student has requested to follow you.",
-      targetType: "user",
-      targetId: target._id,
-      sourceId: request._id,
-    });
+    if (status === "PENDING") {
+      await safelyCreateNotification({
+        io: req.app.get("io"),
+        recipient: target._id,
+        actor: req.user._id,
+        type: "follow_request",
+        title: "New follow request",
+        message: "A student has requested to follow you.",
+        targetType: "user",
+        targetId: target._id,
+        sourceId: request._id,
+      });
+    }
     return res.status(201).json({
-      message: "Follow request sent.",
+      message: status === "ACCEPTED"
+        ? "You are now following this student."
+        : "Follow request sent.",
       status: request.status,
+      ...(await countsFor(target._id)),
     });
   } catch (error) {
     console.error("Create follow request failed:", error.message);
@@ -222,9 +235,7 @@ export const getFollowList = async (req, res) => {
       following: target._id,
       status: "ACCEPTED",
     });
-    if (!canViewProfile(req.user, target, Boolean(viewerFollows))) {
-      return res.status(404).json({ message: "This profile isn't available." });
-    }
+
 
     const field = req.params.list === "followers" ? "following" : "follower";
     const inverse = req.params.list === "followers" ? "follower" : "following";

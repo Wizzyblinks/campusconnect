@@ -3,6 +3,7 @@ import Post from "../models/Post.js";
 import PostComment from "../models/PostComment.js";
 import PostLike from "../models/PostLike.js";
 import PostShare from "../models/PostShare.js";
+import HiddenPost from "../models/HiddenPost.js";
 import { calculateTrendingScore } from "../services/trendingScore.js";
 
 const cache = new Map();
@@ -11,7 +12,15 @@ const CACHE_MS = 60_000;
 export const getTrending = async (req, res) => {
   const cacheKey = `${req.user.institution}:${req.user.campus}`;
   const cached = cache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) return res.json(cached.data);
+  if (cached && cached.expiresAt > Date.now()) {
+    const hiddenIds = new Set(
+      (await HiddenPost.distinct("post", { user: req.user._id })).map(String),
+    );
+    return res.json({
+      ...cached.data,
+      posts: cached.data.posts.filter((post) => !hiddenIds.has(String(post._id))),
+    });
+  }
 
   try {
     const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
@@ -94,7 +103,13 @@ export const getTrending = async (req, res) => {
       calculatedAt: new Date(now).toISOString(),
     };
     cache.set(cacheKey, { data, expiresAt: now + CACHE_MS });
-    return res.json(data);
+    const hiddenIds = new Set(
+      (await HiddenPost.distinct("post", { user: req.user._id })).map(String),
+    );
+    return res.json({
+      ...data,
+      posts: data.posts.filter((post) => !hiddenIds.has(String(post._id))),
+    });
   } catch (error) {
     console.error("Trending calculation failed:", error.message);
     return res.status(500).json({ message: "We couldn't load trending topics right now." });
